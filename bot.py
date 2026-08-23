@@ -4,11 +4,10 @@ from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 import random
 import re
 
-# --- ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ (задаются на сервере) ---
+# --- ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ---
 VK_TOKEN = os.environ.get("VK_TOKEN")
 GROUP_ID = os.environ.get("GROUP_ID")
 
-# Проверка, что переменные установлены
 if not VK_TOKEN:
     raise Exception("Переменная окружения VK_TOKEN не задана!")
 if not GROUP_ID:
@@ -19,14 +18,13 @@ try:
 except ValueError:
     raise Exception("GROUP_ID должен быть целым числом!")
 
-# --- ИНИЦИАЛИЗАЦИЯ БОТА ---
+# --- ИНИЦИАЛИЗАЦИЯ ---
 vk_session = vk_api.VkApi(token=VK_TOKEN)
 longpoll = VkBotLongPoll(vk_session, GROUP_ID)
 vk = vk_session.get_api()
 
 
 def send_message(user_id, message, peer_id=None):
-    """Универсальная функция отправки сообщения"""
     try:
         vk.messages.send(
             user_id=user_id if peer_id is None else None,
@@ -38,31 +36,28 @@ def send_message(user_id, message, peer_id=None):
         print(f"Ошибка отправки: {e}")
 
 
-def roll_dice(expression):
-    """
-    Парсит выражение типа '2d6+3' или 'd20' и возвращает результат.
-    Поддерживает: количество кубиков, тип кубика, модификатор.
-    """
+def parse_and_roll(expression):
+    """Парсит выражение вида d20, 2d6+3 и возвращает результат"""
     expression = expression.lower().replace(' ', '')
     
+    # Если выражение начинается с d, добавляем 1
     if expression.startswith('d'):
         expression = '1' + expression
     
     match = re.match(r'^(\d+)d(\d+)([+-]\d+)?$', expression)
-    
     if not match:
-        return "❌ Неверный формат. Используйте: !roll 2d6+3 или !roll d20"
+        return None, "❌ Неверный формат. Примеры: /d20, /2d6+3, /d100-5"
     
     num_dice = int(match.group(1))
     dice_type = int(match.group(2))
     modifier = int(match.group(3)) if match.group(3) else 0
     
     if num_dice > 100:
-        return "❌ Слишком много кубиков (максимум 100)"
+        return None, "❌ Слишком много кубиков (максимум 100)"
     if dice_type > 1000:
-        return "❌ Слишком большой кубик (максимум d1000)"
+        return None, "❌ Слишком большой кубик (максимум d1000)"
     if num_dice <= 0 or dice_type <= 0:
-        return "❌ Количество и тип кубика должны быть положительными"
+        return None, "❌ Количество и тип кубика должны быть положительными"
     
     rolls = [random.randint(1, dice_type) for _ in range(num_dice)]
     total = sum(rolls) + modifier
@@ -73,7 +68,7 @@ def roll_dice(expression):
         rolls_str = ", ".join(map(str, rolls))
         result_str = f"🎲 **{total}** (броски: {rolls_str}" + (f" {modifier:+d}" if modifier else "") + ")"
     
-    return result_str
+    return result_str, None
 
 
 # --- ОСНОВНОЙ ЦИКЛ ---
@@ -89,26 +84,35 @@ for event in longpoll.listen():
             if not text:
                 continue
             
-            if text.startswith('!roll'):
-                parts = text.split(maxsplit=1)
-                if len(parts) == 1:
-                    result = roll_dice('d20')
-                else:
-                    result = roll_dice(parts[1])
-                send_message(user_id, result, peer_id)
-            
-            elif text == '!help':
+            # --- ОБРАБОТКА КОМАНД (все начинаются с /) ---
+            if text == '/help':
                 help_text = (
                     "🎲 **Команды бота:**\n\n"
-                    "`!roll d20` - бросок 20-гранного кубика\n"
-                    "`!roll 2d6+3` - бросок двух шестигранных кубиков с модификатором +3\n"
-                    "`!roll d100` - бросок 100-гранного кубика\n"
-                    "`!help` - показать эту справку"
+                    "/d20 — бросить 20-гранный кубик\n"
+                    "/2d6+3 — бросить два шестигранных кубика с модификатором +3\n"
+                    "/d100-5 — бросить 100-гранный кубик и вычесть 5\n"
+                    "/3d8 — бросить три восьмигранных кубика\n\n"
+                    "/ping — проверить работу бота\n"
+                    "/help — показать эту справку"
                 )
                 send_message(user_id, help_text, peer_id)
             
-            elif text == '!ping':
+            elif text == '/ping':
                 send_message(user_id, "🏓 Pong! Бот работает.", peer_id)
+            
+            elif text.startswith('/'):
+                # Убираем первый слеш и пытаемся распарсить как бросок
+                cmd = text[1:]  # убираем '/'
+                if cmd:  # если после слеша что-то есть
+                    result, error = parse_and_roll(cmd)
+                    if error:
+                        send_message(user_id, error, peer_id)
+                    else:
+                        send_message(user_id, result, peer_id)
+                else:
+                    # если просто '/'
+                    send_message(user_id, "❌ Введите команду. Например: /d20", peer_id)
+            # --- ВСЁ ОСТАЛЬНОЕ ИГНОРИРУЕМ ---
                 
         except Exception as e:
             print(f"Ошибка в цикле: {e}")

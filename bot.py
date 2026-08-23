@@ -1,17 +1,29 @@
+import os
 import vk_api
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 import random
 import re
 
-# --- КОНФИГУРАЦИЯ (Замените на свои данные) ---
-VK_TOKEN = vk1.a.XVzu68K38Y3jl2tl5YeFgb7Op--pHvaDMVsGEJSaxUmk8qxOFr_UjRwy0IOOPLcJg_5WFboHTRpHJYxHb7UYNcCHEsOqp586uUHmxL8WglXTjQuUoLDdGVXSMTAgYyRhYidURRLUnhBtPvQh0qedMUFGMMMly21KjBZY9RXFOSd814PJnOP0fNB93cnq-S3NC5wyTrERnIktCZd6VeIqZg  # Ключ доступа сообщества
-GROUP_ID = 241027395            # ID вашего сообщества
-# -----------------------------------------------
+# --- ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ (задаются на сервере) ---
+VK_TOKEN = os.environ.get("VK_TOKEN")
+GROUP_ID = os.environ.get("GROUP_ID")
 
-# Подключение к VK API
+# Проверка, что переменные установлены
+if not VK_TOKEN:
+    raise Exception("Переменная окружения VK_TOKEN не задана!")
+if not GROUP_ID:
+    raise Exception("Переменная окружения GROUP_ID не задана!")
+
+try:
+    GROUP_ID = int(GROUP_ID)
+except ValueError:
+    raise Exception("GROUP_ID должен быть целым числом!")
+
+# --- ИНИЦИАЛИЗАЦИЯ БОТА ---
 vk_session = vk_api.VkApi(token=VK_TOKEN)
 longpoll = VkBotLongPoll(vk_session, GROUP_ID)
 vk = vk_session.get_api()
+
 
 def send_message(user_id, message, peer_id=None):
     """Универсальная функция отправки сообщения"""
@@ -25,20 +37,17 @@ def send_message(user_id, message, peer_id=None):
     except Exception as e:
         print(f"Ошибка отправки: {e}")
 
+
 def roll_dice(expression):
     """
     Парсит выражение типа '2d6+3' или 'd20' и возвращает результат.
     Поддерживает: количество кубиков, тип кубика, модификатор.
     """
-    # Убираем пробелы и приводим к нижнему регистру
     expression = expression.lower().replace(' ', '')
     
-    # Если выражение просто 'd20' или 'd6' - добавляем '1' в начало
     if expression.startswith('d'):
         expression = '1' + expression
     
-    # Разбираем выражение с помощью регулярного выражения
-    # Группы: (количество)d(тип)(+/-модификатор)
     match = re.match(r'^(\d+)d(\d+)([+-]\d+)?$', expression)
     
     if not match:
@@ -48,7 +57,6 @@ def roll_dice(expression):
     dice_type = int(match.group(2))
     modifier = int(match.group(3)) if match.group(3) else 0
     
-    # Проверка на разумные пределы
     if num_dice > 100:
         return "❌ Слишком много кубиков (максимум 100)"
     if dice_type > 1000:
@@ -56,11 +64,9 @@ def roll_dice(expression):
     if num_dice <= 0 or dice_type <= 0:
         return "❌ Количество и тип кубика должны быть положительными"
     
-    # Генерация бросков
     rolls = [random.randint(1, dice_type) for _ in range(num_dice)]
     total = sum(rolls) + modifier
     
-    # Формируем красивый ответ
     if num_dice == 1:
         result_str = f"🎲 **{total}** (бросок: {rolls[0]}" + (f" {modifier:+d}" if modifier else "") + ")"
     else:
@@ -69,35 +75,28 @@ def roll_dice(expression):
     
     return result_str
 
-# --- ОСНОВНОЙ ЦИКЛ БОТА ---
-print("Бот успешно запущен!")
+
+# --- ОСНОВНОЙ ЦИКЛ ---
+print("Бот успешно запущен и слушает сообщения...")
+
 for event in longpoll.listen():
     if event.type == VkBotEventType.MESSAGE_NEW:
         try:
-            # Определяем, откуда пришло сообщение (личка или беседа)
             peer_id = event.object.message['peer_id']
             user_id = event.object.message['from_id']
             text = event.object.message['text'].strip()
             
-            # Игнорируем пустые сообщения
             if not text:
                 continue
             
-            # --- ОБРАБОТКА КОМАНД ---
-            
-            # 1. Команда !roll - главная
             if text.startswith('!roll'):
-                # Разбираем аргументы
                 parts = text.split(maxsplit=1)
                 if len(parts) == 1:
-                    # Если нет аргументов - бросаем d20 по умолчанию
                     result = roll_dice('d20')
                 else:
                     result = roll_dice(parts[1])
-                
                 send_message(user_id, result, peer_id)
             
-            # 2. Команда !help - справка
             elif text == '!help':
                 help_text = (
                     "🎲 **Команды бота:**\n\n"
@@ -108,14 +107,12 @@ for event in longpoll.listen():
                 )
                 send_message(user_id, help_text, peer_id)
             
-            # 3. Команда !ping - проверка работы
             elif text == '!ping':
                 send_message(user_id, "🏓 Pong! Бот работает.", peer_id)
                 
         except Exception as e:
-            print(f"Произошла ошибка: {e}")
-            # Пытаемся отправить сообщение об ошибке пользователю
+            print(f"Ошибка в цикле: {e}")
             try:
-                send_message(user_id, "⚠️ Произошла внутренняя ошибка. Попробуйте позже.", peer_id)
+                send_message(user_id, "⚠️ Произошла ошибка. Попробуйте позже.", peer_id)
             except:
                 pass

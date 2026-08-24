@@ -153,7 +153,7 @@ def parse_and_roll_multiple(expression):
 
     details_str = " ".join(details)
     # Возвращаем результат без упоминания и со словом "бросок"
-    result_str = f"Бросок {expression} → результат **{total}**  ({details_str})"
+    result_str = f"{expression} → результат __{total}__ ({details_str})"
     return result_str, None
 
 # ----------------------------------------------

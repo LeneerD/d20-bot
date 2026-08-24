@@ -37,8 +37,12 @@ def send_message(user_id, message, peer_id=None):
 
 
 def parse_and_roll(expression):
-    """Парсит выражение вида d20, 2d6+3 и возвращает результат"""
-    expression = expression.lower().replace(' ', '')
+    """
+    Парсит выражение вида d20, 2d6+3 и возвращает результат.
+    Поддерживает как латинскую 'd', так и русскую 'д' (заменяется на 'd').
+    """
+    # Приводим к нижнему регистру и заменяем русскую 'д' на 'd'
+    expression = expression.lower().replace(' ', '').replace('д', 'd')
     
     # Если выражение начинается с d, добавляем 1
     if expression.startswith('d'):
@@ -46,7 +50,7 @@ def parse_and_roll(expression):
     
     match = re.match(r'^(\d+)d(\d+)([+-]\d+)?$', expression)
     if not match:
-        return None, "❌ Неверный формат. Примеры: /d20, /2d6+3, /d100-5"
+        return None, "❌ Неверный формат. Примеры: /d20, /2d6+3, /д100-5"
     
     num_dice = int(match.group(1))
     dice_type = int(match.group(2))
@@ -85,15 +89,15 @@ for event in longpoll.listen():
                 continue
             
             # --- ОБРАБОТКА КОМАНД (все начинаются с /) ---
-            if text == '/help':
+            if text == '/help' or text == '/помощь':
                 help_text = (
                     "🎲 **Команды бота:**\n\n"
-                    "/d20 — бросить 20-гранный кубик\n"
-                    "/2d6+3 — бросить два шестигранных кубика с модификатором +3\n"
-                    "/d100-5 — бросить 100-гранный кубик и вычесть 5\n"
-                    "/3d8 — бросить три восьмигранных кубика\n\n"
+                    "/d20 или /д20 — бросить 20-гранный кубик\n"
+                    "/2d6+3 или /2д6+3 — бросить два шестигранных кубика с модификатором +3\n"
+                    "/d100-5 или /д100-5 — бросить 100-гранный кубик и вычесть 5\n"
+                    "/3d8 или /3д8 — бросить три восьмигранных кубика\n\n"
                     "/ping — проверить работу бота\n"
-                    "/help — показать эту справку"
+                    "/help или /помощь — показать эту справку"
                 )
                 send_message(user_id, help_text, peer_id)
             
@@ -101,16 +105,17 @@ for event in longpoll.listen():
                 send_message(user_id, "🏓 Pong! Бот работает.", peer_id)
             
             elif text.startswith('/'):
-                # Убираем первый слеш и пытаемся распарсить как бросок
-                cmd = text[1:]  # убираем '/'
-                if cmd:  # если после слеша что-то есть
+                # Убираем первый слеш
+                cmd = text[1:]
+                if cmd:
+                    # Заменяем все русские 'д' на латинские 'd' для единообразия
+                    cmd = cmd.replace('д', 'd')
                     result, error = parse_and_roll(cmd)
                     if error:
                         send_message(user_id, error, peer_id)
                     else:
                         send_message(user_id, result, peer_id)
                 else:
-                    # если просто '/'
                     send_message(user_id, "❌ Введите команду. Например: /d20", peer_id)
             # --- ВСЁ ОСТАЛЬНОЕ ИГНОРИРУЕМ ---
                 

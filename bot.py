@@ -2,6 +2,7 @@ import os
 import json
 import random
 import re
+import time
 import vk_api
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 
@@ -22,16 +23,33 @@ except ValueError:
     raise Exception("GROUP_ID должен быть целым числом!")
 
 vk_session = vk_api.VkApi(token=VK_TOKEN)
-longpoll = VkBotLongPoll(vk_session, GROUP_ID)
+
+# ----------------------------------------------
+# 2. Повторные попытки подключения к LongPoll
+# ----------------------------------------------
+def init_longpoll_with_retry(session, group_id, retries=5, delay=3):
+    """Пытается инициализировать VkBotLongPoll с повторными попытками при ошибках."""
+    for attempt in range(1, retries + 1):
+        try:
+            longpoll = VkBotLongPoll(session, group_id)
+            print(f"✅ LongPoll успешно инициализирован (попытка {attempt})")
+            return longpoll
+        except Exception as e:
+            print(f"⚠️ Ошибка инициализации LongPoll (попытка {attempt}/{retries}): {e}")
+            if attempt == retries:
+                raise  # Последняя попытка — поднимаем исключение
+            time.sleep(delay)  # Ждём перед повторной попыткой
+
+# Инициализируем LongPoll с повторными попытками
+longpoll = init_longpoll_with_retry(vk_session, GROUP_ID)
 vk = vk_session.get_api()
 
 # ----------------------------------------------
-# 2. Кастомные имена (nicknames.json) — статичный список
+# 3. Кастомные имена (nicknames.json)
 # ----------------------------------------------
 NICKNAMES_FILE = "nicknames.json"
 
 def load_nicknames():
-    """Загружает кастомные имена из файла. Если файл повреждён или отсутствует — возвращает {}."""
     if os.path.exists(NICKNAMES_FILE):
         try:
             with open(NICKNAMES_FILE, 'r', encoding='utf-8') as f:
@@ -42,7 +60,6 @@ def load_nicknames():
     return {}
 
 def save_nicknames(data):
-    """Сохраняет словарь имён в файл (используется только для ручного редактирования)."""
     try:
         with open(NICKNAMES_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -51,16 +68,13 @@ def save_nicknames(data):
 
 nicknames = load_nicknames()
 
-# Кеш для имён, полученных из VK (чтобы не дёргать API каждый раз)
+# Кеш для имён из VK
 user_cache = {}
 
 def get_user_name(user_id):
-    """Возвращает кастомное имя из файла, если есть, иначе — имя из VK (только first_name)."""
     user_id_str = str(user_id)
-    # 1. Если есть кастомное имя — используем его
     if user_id_str in nicknames:
         return nicknames[user_id_str]
-    # 2. Иначе запрашиваем у VK (с кешированием)
     if user_id not in user_cache:
         try:
             user = vk.users.get(user_ids=user_id, fields=[])
@@ -73,7 +87,6 @@ def get_user_name(user_id):
     return user_cache[user_id]
 
 def mention_user(user_id, peer_id):
-    """Возвращает упоминание пользователя, если сообщение отправлено в беседе."""
     if peer_id != user_id:
         name = get_user_name(user_id)
         return f"[id{user_id}|{name}], "
@@ -91,7 +104,7 @@ def send_message(user_id, message, peer_id=None):
         print(f"Ошибка отправки: {e}")
 
 # ----------------------------------------------
-# 3. Таблицы навыков (четыре таблицы)
+# 4. Таблицы навыков (четыре таблицы)
 # ----------------------------------------------
 TABLES = {
     "melee": {
@@ -149,7 +162,6 @@ TABLES = {
 }
 
 def roll_table(table_name):
-    """Бросает 2d6 и возвращает результат из указанной таблицы."""
     if table_name not in TABLES:
         available = ", ".join(TABLES.keys())
         return None, f"Таблица '{table_name}' не найдена. Доступные: {available}"
@@ -162,7 +174,7 @@ def roll_table(table_name):
     return result, None
 
 # ----------------------------------------------
-# 4. Основные функции команд
+# 5. Основные функции команд
 # ----------------------------------------------
 def flip_coin():
     return "Орёл!" if random.choice([True, False]) else "Решка!"
@@ -185,7 +197,6 @@ def random_number(args):
         return None, "Укажите два числа через пробел. Пример: /rand 1 100"
 
 def parse_and_roll_multiple(expression):
-    """Бросает несколько кубиков с поддержкой сложных выражений."""
     expr = expression.lower().replace(' ', '').replace('д', 'd')
     if not expr:
         return None, "Пустое выражение"
@@ -248,7 +259,7 @@ def parse_and_roll_multiple(expression):
     return result_str, None
 
 # ----------------------------------------------
-# 5. Главный цикл обработки сообщений
+# 6. Главный цикл обработки сообщений
 # ----------------------------------------------
 print("Бот успешно запущен и слушает сообщения...")
 
@@ -273,7 +284,6 @@ for event in longpoll.listen():
                 command = parts[0].lower()
                 args = parts[1:] if len(parts) > 1 else []
 
-                # --- Обработка команд ---
                 if command in ('help', 'помощь'):
                     help_text = (
                         "🎲 **Команды бота:**\n\n"
@@ -341,7 +351,6 @@ for event in longpoll.listen():
                     send_message(user_id, f"{mention}Pong! Бот работает.", peer_id)
 
                 else:
-                    # Всё остальное считается броском кубиков
                     result, error = parse_and_roll_multiple(cmd)
                     if error:
                         msg = mention_user(user_id, peer_id) + "Ошибка: " + error

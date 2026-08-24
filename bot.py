@@ -1,11 +1,13 @@
 import os
 import json
-import vk_api
-from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 import random
 import re
+import vk_api
+from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 
-# --- ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ---
+# ----------------------------------------------
+# 1. Переменные окружения и инициализация
+# ----------------------------------------------
 VK_TOKEN = os.environ.get("VK_TOKEN")
 GROUP_ID = os.environ.get("GROUP_ID")
 
@@ -19,46 +21,46 @@ try:
 except ValueError:
     raise Exception("GROUP_ID должен быть целым числом!")
 
-# --- ИНИЦИАЛИЗАЦИЯ ---
 vk_session = vk_api.VkApi(token=VK_TOKEN)
 longpoll = VkBotLongPoll(vk_session, GROUP_ID)
 vk = vk_session.get_api()
 
-# ---------- Кастомные имена ----------
+# ----------------------------------------------
+# 2. Кастомные имена (nicknames.json) — статичный список
+# ----------------------------------------------
 NICKNAMES_FILE = "nicknames.json"
 
 def load_nicknames():
-    """Загружает словарь кастомных имён из JSON-файла. При ошибке возвращает {}."""
+    """Загружает кастомные имена из файла. Если файл повреждён или отсутствует — возвращает {}."""
     if os.path.exists(NICKNAMES_FILE):
         try:
             with open(NICKNAMES_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError) as e:
             print(f"⚠️ Ошибка чтения nicknames.json: {e}. Используется пустой словарь.")
-            # Можно заархивировать повреждённый файл
-            # os.rename(NICKNAMES_FILE, NICKNAMES_FILE + ".broken")
             return {}
     return {}
 
-def save_nicknames(nicknames):
-    """Сохраняет словарь кастомных имён в JSON-файл."""
+def save_nicknames(data):
+    """Сохраняет словарь имён в файл (используется только для ручного редактирования)."""
     try:
         with open(NICKNAMES_FILE, 'w', encoding='utf-8') as f:
-            json.dump(nicknames, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
     except IOError as e:
         print(f"⚠️ Ошибка сохранения nicknames.json: {e}")
 
-# Загружаем кастомные имена при старте
 nicknames = load_nicknames()
 
-user_cache = {}  # кеш для стандартных имён
+# Кеш для имён, полученных из VK (чтобы не дёргать API каждый раз)
+user_cache = {}
 
 def get_user_name(user_id):
+    """Возвращает кастомное имя из файла, если есть, иначе — имя из VK (только first_name)."""
     user_id_str = str(user_id)
-    # Если есть кастомное имя — используем его
+    # 1. Если есть кастомное имя — используем его
     if user_id_str in nicknames:
         return nicknames[user_id_str]
-    # Иначе — стандартное имя (только имя, без фамилии)
+    # 2. Иначе запрашиваем у VK (с кешированием)
     if user_id not in user_cache:
         try:
             user = vk.users.get(user_ids=user_id, fields=[])
@@ -71,6 +73,7 @@ def get_user_name(user_id):
     return user_cache[user_id]
 
 def mention_user(user_id, peer_id):
+    """Возвращает упоминание пользователя, если сообщение отправлено в беседе."""
     if peer_id != user_id:
         name = get_user_name(user_id)
         return f"[id{user_id}|{name}], "
@@ -88,14 +91,82 @@ def send_message(user_id, message, peer_id=None):
         print(f"Ошибка отправки: {e}")
 
 # ----------------------------------------------
-# 1. Монетка
+# 3. Таблицы навыков (четыре таблицы)
+# ----------------------------------------------
+TABLES = {
+    "melee": {
+        2: ("Patron Skill", "Pick one of the Skills offered by your patron."),
+        3: ("Stand Firm", "The first time a model with this Skill suffers a Down result on the Injury table, it is treated as a Minor Hit result instead."),
+        4: ("Parry", "Add -1 Dice to Success Rolls for Melee Attacks that target a model with this Skill."),
+        5: ("Close Quarter Combat", "Add +1 Dice and +1 Injury Dice to rolls for Melee Attacks made by a model with this Skill if it is in contact with a terrain piece."),
+        6: ("Relentless Charge", "Add +1 Dice to rolls for Melee Attacks made by a model with this Skill if it successfully charged earlier in the same Activation."),
+        7: ("Melee Proficiency", "Add +1 Dice to the Melee Characteristic of a model with this Skill."),
+        8: ("Strength of Samson", "Add +1 Injury Dice to rolls for Melee Attacks using a Melee Weapon made by a model with this Skill. In addition, a model with this Skill has the Strong keyword."),
+        9: ("Hard as Nails", "The first time a model with this Skill suffers a Down result on the Injury table, it is treated as a No Effect result instead."),
+        10: ("Surgical Strike", "Once per Activation, before you make an Injury Roll for a Melee Attack made by a model with this Skill, you can say that the roll has the Ignore Armour Keyword."),
+        11: ("Champion", "Melee Weapons that do not have the Cleave Keyword which are used by a model with this Skill gain the Cleave 2 Keyword. In addition, add -1 Dice to the Success Roll for the second Melee Attack made with each Melee Weapon that gains the Cleave Keyword."),
+        12: ("Patron Skill", "Pick one of the Skills offered by your patron."),
+    },
+    "ranged": {
+        2: ("Patron Skill", "Pick one of the Skills offered by your patron."),
+        3: ("Hunter", "Ranged Attacks made by a model with this Skill have the Ignore COVER Keyword."),
+        4: ("Gunslinger", "The following rules apply to a model with this Skill if it is armed with Ranged Weapons with the Pistol Keyword.\n\nIf it is equipped with 2 Weapons with the Pistol Keyword, it can take a Shoot ACTION with one and then immediately take a Shoot ACTION with the other.\nAdd the Assault and Ignore OFF-HAND WEAPON Keywords to any weapons that have the Pistol Keyword (unless they have them already)."),
+        5: ("Far Shot", "Add 6\" to the Range of the following Weapons when they are used by a model that has this Skill:\n\n- Any Weapon with the Pistol Keyword.\n- Any Weapon which has the word “Rifle” as part of its name (i.e. a Bolt Action Rifle, Assault Rifle etc).\n- Any Weapon which has either the word “Jezzail” or “Arquebus” as part of its name."),
+        6: ("Sharp Eyes", "Ranged Attacks made by a model with this Skill have the Ignore LONG RANGE Keyword."),
+        7: ("Ranged Proficiency", "Add +1 Dice to the Ranged Characteristic of a model with this Skill."),
+        8: ("Sniper's Nest", "Add +2 Dice to rolls for Ranged Attacks made with the Elevated Position modifier by a model with this Skill instead of +1 Dice."),
+        9: ("Point Blank", "When a model with this Skill makes a Melee Attack, it can use a Ranged Weapon and its Ranged Attack Characteristic instead of a Melee Weapon and its Melee Attack Characteristic. It must still be within 1\" of the target model to make the attack. It can also use the Ranged Weapon to make a Ranged Attack during the same Activation if it has the Assault Keyword."),
+        10: ("Hip Shot", "Ranged Weapons used by a model with this Skill count as having the Assault Keyword unless they already have it."),
+        11: ("Head Shot", "Ranged Attacks made by a model with this Skill have the Ignore Armour Keyword if the attack was a Critical Success."),
+        12: ("Patron Skill", "Pick one of the Skills offered by your patron."),
+    },
+    "stealth": {
+        2: ("Patron Skill", "Pick one of the Skills offered by your patron."),
+        3: ("Sixth Sense", "If a model with this Skill suffers a Down result on the Injury table, it is treated as a Minor Hit result instead if the model does not have any Blood Markers. If the model also has the Tough Keyword, once per game it can use the Keyword to change an Out of Action result to a Down result, and then use this Skill to change the Down result to No Effect."),
+        4: ("Assassinate", "Add +1 Dice to rolls for attacks made by a model with this Skill if the target has not yet been Activated this Turn."),
+        5: ("Shadow Walker", "Add -2 Dice to rolls for Ranged Attacks that target a model with this Skill at Long Range instead of -1 Dice."),
+        6: ("Athletic", "Add +1 Dice to Risky Success rolls for a model with this Skill when it Climbs, Jumps or makes a Diving Charge, and add -1 Injury Dice to Injury Rolls if it Falls."),
+        7: ("Sprinter", "Add +1 Dice to the Risky Success Roll for a model with this Skill that is taking a Dash ACTION."),
+        8: ("Disengage", "Enemy models cannot make a Melee Attack on a model with this Skill when it Retreats."),
+        9: ("Incoming", "When you roll the Charge Bonus for a model with this Skill, roll 1 extra D6 and use the single highest dice to determine the bonus."),
+        10: ("Nimble", "Do not halve the Movement Characteristic of a model with this Skill when it stands up."),
+        11: ("Dodge", "Add -1 Dice to rolls for Ranged Attacks that target a model with this Skill."),
+        12: ("Patron Skill", "Pick one of the Skills offered by your patron."),
+    },
+    "wildcard": {
+        2: ("Patron Skill", "Pick one of the Skills offered by your patron."),
+        3: ("War Luck", "A model with this Skill can suffer 1 extra Battle Scar before they are Unfit for Duty."),
+        4: ("'Tis but a Scratch", "You can re-roll the result on the Trauma Chart for a model with this Skill."),
+        5: ("Bad Company", "A model with this Skill does not count towards the number of Elite models that are in your Warband at the start of the Promotion step."),
+        6: ("Scavenger", "A model with this Skill has the Extra Dice Exploration Skill."),
+        7: ("Skill & Expertise", "When you give a model this Skill, choose 1 Action on that model's Warband Entry, or 1 Common Action apart from Fight or Shoot ActionS, and write it on your Warband Roster. Add +1 Dice to rolls made as part of the chosen Action when they are taken by this model."),
+        8: ("Show Off", "Add 1 dice to the Promotion Pool in the Promotion step for each model in your Warband with this Skill."),
+        9: ("Friends In High Places", "A model with this Skill has the Re-roll Dice Exploration Skill."),
+        10: ("Glory Hound", "At the end of each game, your Warband receives 1 extra  for each model with this Skill that is on the battlefield."),
+        11: ("War Stories", "When you are recording the Experience Points earned by the models in your Warband in the Campaign Phase, you can give each model with the Elite Keyword that does not also have this Skill +1 extra Experience Point. You can’t pick the model with the Skill itself. A Warband can only have one model with this Skill."),
+        12: ("Patron Skill", "Pick one of the Skills offered by your patron."),
+    }
+}
+
+def roll_table(table_name):
+    """Бросает 2d6 и возвращает результат из указанной таблицы."""
+    if table_name not in TABLES:
+        available = ", ".join(TABLES.keys())
+        return None, f"Таблица '{table_name}' не найдена. Доступные: {available}"
+    table = TABLES[table_name]
+    roll1 = random.randint(1, 6)
+    roll2 = random.randint(1, 6)
+    total = roll1 + roll2
+    name, description = table[total]
+    result = f"2d6 → {roll1}+{roll2} = **{total}** — *{name}* — {description}"
+    return result, None
+
+# ----------------------------------------------
+# 4. Основные функции команд
 # ----------------------------------------------
 def flip_coin():
     return "Орёл!" if random.choice([True, False]) else "Решка!"
 
-# ----------------------------------------------
-# 2. Случайное число
-# ----------------------------------------------
 def random_number(args):
     if not args:
         num = random.randint(0, 100)
@@ -113,10 +184,8 @@ def random_number(args):
     else:
         return None, "Укажите два числа через пробел. Пример: /rand 1 100"
 
-# ----------------------------------------------
-# 3. Бросок нескольких кубиков
-# ----------------------------------------------
 def parse_and_roll_multiple(expression):
+    """Бросает несколько кубиков с поддержкой сложных выражений."""
     expr = expression.lower().replace(' ', '').replace('д', 'd')
     if not expr:
         return None, "Пустое выражение"
@@ -179,7 +248,7 @@ def parse_and_roll_multiple(expression):
     return result_str, None
 
 # ----------------------------------------------
-# 4. Основной цикл
+# 5. Главный цикл обработки сообщений
 # ----------------------------------------------
 print("Бот успешно запущен и слушает сообщения...")
 
@@ -204,6 +273,7 @@ for event in longpoll.listen():
                 command = parts[0].lower()
                 args = parts[1:] if len(parts) > 1 else []
 
+                # --- Обработка команд ---
                 if command in ('help', 'помощь'):
                     help_text = (
                         "🎲 **Команды бота:**\n\n"
@@ -214,6 +284,9 @@ for event in longpoll.listen():
                         "**Специальные команды:**\n"
                         "/coin или /монетка — подбросить монетку\n"
                         "/rand 1 100 — случайное число в диапазоне\n"
+                        "/skill [таблица] или /навык [таблица] — бросок 2d6 по таблице (по умолчанию melee)\n"
+                        "/table <таблица> — бросок по указанной таблице\n"
+                        "/tables — список доступных таблиц\n"
                         "/ping — проверка работы\n"
                         "/help или !help — эта справка"
                     )
@@ -229,25 +302,53 @@ for event in longpoll.listen():
                     result, error = random_number(args)
                     if error:
                         msg = mention_user(user_id, peer_id) + "Ошибка: " + error
-                        send_message(user_id, msg, peer_id)
                     else:
                         mention = mention_user(user_id, peer_id)
                         msg = f"{mention}Результат: {result}"
-                        send_message(user_id, msg, peer_id)
+                    send_message(user_id, msg, peer_id)
+
+                elif command in ('skill', 'навык'):
+                    table_name = args[0].lower() if args else 'melee'
+                    result, error = roll_table(table_name)
+                    if error:
+                        msg = mention_user(user_id, peer_id) + "Ошибка: " + error
+                    else:
+                        mention = mention_user(user_id, peer_id)
+                        msg = f"{mention}Бросок навыка ({table_name}): {result}"
+                    send_message(user_id, msg, peer_id)
+
+                elif command == 'table':
+                    if not args:
+                        available = ", ".join(TABLES.keys())
+                        msg = f"Укажите имя таблицы. Доступные: {available}"
+                    else:
+                        table_name = args[0].lower()
+                        result, error = roll_table(table_name)
+                        if error:
+                            msg = "Ошибка: " + error
+                        else:
+                            mention = mention_user(user_id, peer_id)
+                            msg = f"{mention}Бросок по таблице {table_name}: {result}"
+                    send_message(user_id, mention_user(user_id, peer_id) + msg, peer_id)
+
+                elif command == 'tables':
+                    available = ", ".join(TABLES.keys())
+                    msg = f"Доступные таблицы: {available}"
+                    send_message(user_id, mention_user(user_id, peer_id) + msg, peer_id)
 
                 elif command == 'ping':
                     mention = mention_user(user_id, peer_id)
                     send_message(user_id, f"{mention}Pong! Бот работает.", peer_id)
 
                 else:
+                    # Всё остальное считается броском кубиков
                     result, error = parse_and_roll_multiple(cmd)
                     if error:
                         msg = mention_user(user_id, peer_id) + "Ошибка: " + error
-                        send_message(user_id, msg, peer_id)
                     else:
                         mention = mention_user(user_id, peer_id)
                         msg = f"{mention}Бросок {result}"
-                        send_message(user_id, msg, peer_id)
+                    send_message(user_id, msg, peer_id)
 
         except Exception as e:
             print(f"Ошибка в цикле: {e}")

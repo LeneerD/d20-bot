@@ -152,8 +152,8 @@ def parse_and_roll_multiple(expression):
         return None, "Не удалось разобрать выражение"
 
     details_str = " ".join(details)
-    # Возвращаем результат без упоминания и без слова "бросок"
-    result_str = f"{expression} → **{total}**  ({details_str})"
+    # Возвращаем результат без упоминания и со словом "бросок"
+    result_str = Бросок f"{expression} → результат **{total}**  ({details_str})"
     return result_str, None
 
 # ----------------------------------------------

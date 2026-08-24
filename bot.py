@@ -32,7 +32,7 @@ def get_user_name(user_id):
         try:
             user = vk.users.get(user_ids=user_id, fields=[])
             if user:
-                user_cache[user_id] = f"{user[0]['first_name']} {user[0]['last_name']}"
+                user_cache[user_id] = f"{user[0]['first_name']}"
             else:
                 user_cache[user_id] = f"Пользователь {user_id}"
         except:

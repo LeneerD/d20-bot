@@ -14,20 +14,11 @@ logger = logging.getLogger(__name__)
 # ---- Переменные окружения ----
 VK_TOKEN = os.environ.get("VK_TOKEN")
 GROUP_ID = os.environ.get("GROUP_ID")
-OWNER_ID = os.environ.get("OWNER_ID")  # ID владельца (для команды /reload)
 
 if not VK_TOKEN:
     raise Exception("Переменная окружения VK_TOKEN не задана!")
 if not GROUP_ID:
     raise Exception("Переменная окружения GROUP_ID не задана!")
-if not OWNER_ID:
-    logger.warning("OWNER_ID не задан – команда /reload будет недоступна")
-else:
-    try:
-        OWNER_ID = int(OWNER_ID)
-    except ValueError:
-        logger.error("OWNER_ID должен быть целым числом!")
-        OWNER_ID = None
 
 try:
     GROUP_ID = int(GROUP_ID)
@@ -109,65 +100,135 @@ def send_message(user_id, message, peer_id=None):
         logger.error(f"Ошибка отправки сообщения: {e}")
 
 def format_response(mention, result, comment=None):
-    """Универсальное форматирование ответа с упоминанием и комментарием."""
     if comment:
         return f"{mention}{result} (комментарий: {comment})"
     return f"{mention}{result}"
 
-# ---- Загрузка таблиц из JSON ----
-DATA_DIR = "data"
-TABLES_FILE = os.path.join(DATA_DIR, "tables.json")
-INJURY_FILE = os.path.join(DATA_DIR, "injury.json")
+# ---- Дефолтные таблицы (встроенные) ----
+DEFAULT_TABLES = {
+    "melee": {
+        "2": ["Patron Skill", "Pick one of the Skills offered by your patron."],
+        "3": ["Stand Firm", "The first time a model with this Skill suffers a Down result on the Injury table, it is treated as a Minor Hit result instead."],
+        "4": ["Parry", "Add -1 Dice to Success Rolls for Melee Attacks that target a model with this Skill."],
+        "5": ["Close Quarter Combat", "Add +1 Dice and +1 Injury Dice to rolls for Melee Attacks made by a model with this Skill if it is in contact with a terrain piece."],
+        "6": ["Relentless Charge", "Add +1 Dice to rolls for Melee Attacks made by a model with this Skill if it successfully charged earlier in the same Activation."],
+        "7": ["Melee Proficiency", "Add +1 Dice to the Melee Characteristic of a model with this Skill."],
+        "8": ["Strength of Samson", "Add +1 Injury Dice to rolls for Melee Attacks using a Melee Weapon made by a model with this Skill. In addition, a model with this Skill has the Strong keyword."],
+        "9": ["Hard as Nails", "The first time a model with this Skill suffers a Down result on the Injury table, it is treated as a No Effect result instead."],
+        "10": ["Surgical Strike", "Once per Activation, before you make an Injury Roll for a Melee Attack made by a model with this Skill, you can say that the roll has the Ignore Armour Keyword."],
+        "11": ["Champion", "Melee Weapons that do not have the Cleave Keyword which are used by a model with this Skill gain the Cleave 2 Keyword. In addition, add -1 Dice to the Success Roll for the second Melee Attack made with each Melee Weapon that gains the Cleave Keyword."],
+        "12": ["Patron Skill", "Pick one of the Skills offered by your patron."]
+    },
+    "ranged": {
+        "2": ["Patron Skill", "Pick one of the Skills offered by your patron."],
+        "3": ["Hunter", "Ranged Attacks made by a model with this Skill have the Ignore COVER Keyword."],
+        "4": ["Gunslinger", "The following rules apply to a model with this Skill if it is armed with Ranged Weapons with the Pistol Keyword.\n\nIf it is equipped with 2 Weapons with the Pistol Keyword, it can take a Shoot ACTION with one and then immediately take a Shoot ACTION with the other.\nAdd the Assault and Ignore OFF-HAND WEAPON Keywords to any weapons that have the Pistol Keyword (unless they have them already)."],
+        "5": ["Far Shot", "Add 6\" to the Range of the following Weapons when they are used by a model that has this Skill:\n\n- Any Weapon with the Pistol Keyword.\n- Any Weapon which has the word “Rifle” as part of its name (i.e. a Bolt Action Rifle, Assault Rifle etc).\n- Any Weapon which has either the word “Jezzail” or “Arquebus” as part of its name."],
+        "6": ["Sharp Eyes", "Ranged Attacks made by a model with this Skill have the Ignore LONG RANGE Keyword."],
+        "7": ["Ranged Proficiency", "Add +1 Dice to the Ranged Characteristic of a model with this Skill."],
+        "8": ["Sniper's Nest", "Add +2 Dice to rolls for Ranged Attacks made with the Elevated Position modifier by a model with this Skill instead of +1 Dice."],
+        "9": ["Point Blank", "When a model with this Skill makes a Melee Attack, it can use a Ranged Weapon and its Ranged Attack Characteristic instead of a Melee Weapon and its Melee Attack Characteristic. It must still be within 1\" of the target model to make the attack. It can also use the Ranged Weapon to make a Ranged Attack during the same Activation if it has the Assault Keyword."],
+        "10": ["Hip Shot", "Ranged Weapons used by a model with this Skill count as having the Assault Keyword unless they already have it."],
+        "11": ["Head Shot", "Ranged Attacks made by a model with this Skill have the Ignore Armour Keyword if the attack was a Critical Success."],
+        "12": ["Patron Skill", "Pick one of the Skills offered by your patron."]
+    },
+    "stealth": {
+        "2": ["Patron Skill", "Pick one of the Skills offered by your patron."],
+        "3": ["Sixth Sense", "If a model with this Skill suffers a Down result on the Injury table, it is treated as a Minor Hit result instead if the model does not have any Blood Markers. If the model also has the Tough Keyword, once per game it can use the Keyword to change an Out of Action result to a Down result, and then use this Skill to change the Down result to No Effect."],
+        "4": ["Assassinate", "Add +1 Dice to rolls for attacks made by a model with this Skill if the target has not yet been Activated this Turn."],
+        "5": ["Shadow Walker", "Add -2 Dice to rolls for Ranged Attacks that target a model with this Skill at Long Range instead of -1 Dice."],
+        "6": ["Athletic", "Add +1 Dice to Risky Success rolls for a model with this Skill when it Climbs, Jumps or makes a Diving Charge, and add -1 Injury Dice to Injury Rolls if it Falls."],
+        "7": ["Sprinter", "Add +1 Dice to the Risky Success Roll for a model with this Skill that is taking a Dash ACTION."],
+        "8": ["Disengage", "Enemy models cannot make a Melee Attack on a model with this Skill when it Retreats."],
+        "9": ["Incoming", "When you roll the Charge Bonus for a model with this Skill, roll 1 extra D6 and use the single highest dice to determine the bonus."],
+        "10": ["Nimble", "Do not halve the Movement Characteristic of a model with this Skill when it stands up."],
+        "11": ["Dodge", "Add -1 Dice to rolls for Ranged Attacks that target a model with this Skill."],
+        "12": ["Patron Skill", "Pick one of the Skills offered by your patron."]
+    },
+    "wildcard": {
+        "2": ["Patron Skill", "Pick one of the Skills offered by your patron."],
+        "3": ["War Luck", "A model with this Skill can suffer 1 extra Battle Scar before they are Unfit for Duty."],
+        "4": ["'Tis but a Scratch", "You can re-roll the result on the Trauma Chart for a model with this Skill."],
+        "5": ["Bad Company", "A model with this Skill does not count towards the number of Elite models that are in your Warband at the start of the Promotion step."],
+        "6": ["Scavenger", "A model with this Skill has the Extra Dice Exploration Skill."],
+        "7": ["Skill & Expertise", "When you give a model this Skill, choose 1 Action on that model's Warband Entry, or 1 Common Action apart from Fight or Shoot ActionS, and write it on your Warband Roster. Add +1 Dice to rolls made as part of the chosen Action when they are taken by this model."],
+        "8": ["Show Off", "Add 1 dice to the Promotion Pool in the Promotion step for each model in your Warband with this Skill."],
+        "9": ["Friends In High Places", "A model with this Skill has the Re-roll Dice Exploration Skill."],
+        "10": ["Glory Hound", "At the end of each game, your Warband receives 1 extra  for each model with this Skill that is on the battlefield."],
+        "11": ["War Stories", "When you are recording the Experience Points earned by the models in your Warband in the Campaign Phase, you can give each model with the Elite Keyword that does not also have this Skill +1 extra Experience Point. You can’t pick the model with the Skill itself. A Warband can only have one model with this Skill."],
+        "12": ["Patron Skill", "Pick one of the Skills offered by your patron."]
+    }
+}
 
-def load_tables():
-    """Загружает таблицы навыков из tables.json."""
-    default = {}  # пустой словарь, если файл не найден
-    if os.path.exists(TABLES_FILE):
-        try:
-            with open(TABLES_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            logger.error(f"Ошибка чтения tables.json: {e}. Используется пустой словарь.")
-            return default
-    else:
-        logger.warning(f"Файл {TABLES_FILE} не найден. Создайте его с таблицами.")
-        return default
+DEFAULT_INJURY = {
+    "11": ["Dead", "The wound proved to be fatal. Remove the model and its Battlekit from your Warband Roster."],
+    "12": ["Captured", "The enemy captures the model. Before continuing the Trauma Step, you and your opponent from the game can negotiate a ransom price in  for the release of the model. If the ransom is not paid, the captured model is executed – remove them from your Warband Roster. If the ransom is paid, transfer the  from your Strongbox to your opponent’s, and treat this result as a Full Recovery. Continue with the Trauma Step after resolving the outcome of the ransom."],
+    "13": ["Severe Nerve Damage", "All Success Rolls you take for this model are treated as being Risky Success Rolls, unless they are Risky Success Rolls already, in which case there is no additional penalty."],
+    "14": ["Hand Wound", "Randomly determine which hand has been injured. Add -1 Dice to rolls for attacks made for this model with a Melee Weapon that is held (or jointly held) by the injured hand."],
+    "15": ["Lost An Eye", "Add -1 Dice to rolls for Ranged Attacks made for this model. If this model receives this injury for a second time, they are blinded and you must remove them from your Warband Roster instead of re-rolling the result. Treat this injury as a Full Recovery if it is inflicted on a Sniper Priest."],
+    "16": ["Chest Wound", "Add +1 Injury Dice to Injury Rolls for attacks that target this model."],
+    "21": ["Insomniac", "This model must always be the first model you deploy in any game it takes part in, and loses the Infiltrator Keyword if it has it."],
+    "22": ["Head Wound", "This model can no longer gain Experience Points. You can assign Promotion Dice to this model as if it were a Troop in the Promotions and Experience Step. If one of its assigned Promotion Dice rolls a “6”, it regains the ability to gain Experience Points, although the Battle Scar remains."],
+    "23": ["Shell Shocked", "Roll a D6 the first time this model is deployed during a game. On a 1-2, add -1 Dice to rolls for this model for the rest of the game."],
+    "24": ["Dark Memory", "Write down the name of the Warband from the game where this injury was received. Add -1 Dice to rolls for Melee Attacks made by this model if the target is a model from the Warband you have written down."],
+    "25": ["Paranoid", "This model cannot be deployed within 8\" of a friendly model. Friendly models can be deployed within 8\" of this model after it has been deployed."],
+    "26": ["Lost Arm", "This model cannot use Battlekit that requires 2 hands, and can only use one piece of Battlekit that requires 1 hand."],
+    "31": ["Leg Wound", "Subtract 2\" from this model’s Movement Characteristic. In addition, add -1 Dice to the Risky Success Roll for this model when it takes a Dash Action."],
+    "32": ["Expensive Treatment", "The model’s wounds require constant treatment. Before you can deploy this model, you must deduct 10  from your Warband’s Strongbox. This payment does not count towards your Warband’s Threshold Value."],
+    "33": ["Possessed", "When this model is Activated, if it is more than 1” from any enemy models the first Action that it takes must take a Dash Action, even if another rule states that it cannot take a Dash Action. In addition, the first 3” of this move must be in a straight line directly away from its starting position, if it is possible for it to do so. If the model is Down at the start of the Activation, it will stand up if it can do so and must then attempt to move 3” in a straight line away from its starting position."],
+    "34": ["Muscle Damage", "This model cannot have Battlekit that has the Heavy Keyword. Any that it has when the Injury is suffered is lost."],
+    "35": ["Minor Wound", "This model cannot be used in the next game."],
+    "36": ["Robbed", "All of the model’s Battlekit is lost, unless it is Battlekit that cannot be lost or removed during a campaign. It does not receive an Injury or a Battle Scar"],
+    "41": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "42": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "43": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "44": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "45": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "46": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "47": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "48": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "49": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "50": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "51": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "52": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "53": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "54": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "55": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "56": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "57": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "58": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "59": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "60": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "61": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "62": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "63": ["Full Recovery", "The model has survived the battle with no ill effects. It does not receive an Injury or a Battle Scar."],
+    "64": ["Hardened", "This model gains the Negate Fear Keyword. It does not receive an Injury or a Battle Scar."],
+    "65": ["Bitter Lessons", "This model gains D3 extra Experience Points. It does not receive an Injury or a Battle Scar."],
+    "66": ["Prominent Scar", "Write down the name of the Warband from the game where this injury was received. Add +1 Dice to rolls for Melee Attacks made by this model if the target is a model from the Warband you have written down. It does not receive an Injury or a Battle Scar."]
+}
 
-def load_injury():
-    """Загружает таблицу ранений из injury.json."""
-    default = {}
-    if os.path.exists(INJURY_FILE):
+# ---- Загрузка таблиц из файлов в корне (если они есть) ----
+TABLES_FILE = "tables.json"
+INJURY_FILE = "injury.json"
+
+def load_json_file(filename, default_dict):
+    """Загружает JSON из файла, если он есть, иначе возвращает default_dict."""
+    if os.path.exists(filename):
         try:
-            with open(INJURY_FILE, 'r', encoding='utf-8') as f:
+            with open(filename, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # Для диапазона 41-63 автоматически заполним Full Recovery, если не заданы
-                # Но мы можем положиться на данные из файла
+                logger.info(f"Загружен файл {filename}")
                 return data
         except (json.JSONDecodeError, IOError) as e:
-            logger.error(f"Ошибка чтения injury.json: {e}. Используется пустой словарь.")
-            return default
+            logger.error(f"Ошибка чтения {filename}: {e}. Используются встроенные таблицы.")
+            return default_dict
     else:
-        logger.warning(f"Файл {INJURY_FILE} не найден. Создайте его с таблицей ранений.")
-        return default
+        logger.info(f"Файл {filename} не найден, используются встроенные таблицы.")
+        return default_dict
 
-# Глобальные переменные для таблиц (будут загружены при старте)
-TABLES = load_tables()
-INJURY_TABLE = load_injury()
-
-def reload_tables():
-    """Перезагружает таблицы из файлов (используется в /reload)."""
-    global TABLES, INJURY_TABLE
-    new_tables = load_tables()
-    new_injury = load_injury()
-    if new_tables:
-        TABLES = new_tables
-    else:
-        logger.warning("Не удалось загрузить tables.json – таблицы не обновлены")
-    if new_injury:
-        INJURY_TABLE = new_injury
-    else:
-        logger.warning("Не удалось загрузить injury.json – таблица ранений не обновлена")
-    return bool(new_tables) or bool(new_injury)
+# Глобальные таблицы (загружаем из файлов или используем дефолтные)
+TABLES = load_json_file(TABLES_FILE, DEFAULT_TABLES)
+INJURY_TABLE = load_json_file(INJURY_FILE, DEFAULT_INJURY)
 
 # ---- Утилита для извлечения комментария ----
 def extract_comment(cmd):
@@ -185,8 +246,7 @@ def roll_table(table_name):
     roll1 = random.randint(1, 6)
     roll2 = random.randint(1, 6)
     total = roll1 + roll2
-    # Ожидаем, что в JSON значение для ключа – список [название, описание]
-    entry = table.get(str(total))  # ключи в JSON – строки
+    entry = table.get(str(total))
     if entry is None:
         return None, f"Ошибка: для суммы {total} нет записи в таблице."
     name, description = entry
@@ -194,15 +254,11 @@ def roll_table(table_name):
     return result, None
 
 def get_injury_description(result):
-    """Возвращает (название_травмы, описание) по числовому результату D66."""
     key = str(result)
     if key in INJURY_TABLE:
         entry = INJURY_TABLE[key]
         if isinstance(entry, list) and len(entry) >= 2:
             return entry[0], entry[1]
-        elif isinstance(entry, str):
-            # Если сохранено только описание, используем его
-            return "Injury", entry
     return "Unknown Injury", "No description available."
 
 def roll_injury():
@@ -343,7 +399,6 @@ for event in longpoll.listen():
                         "/table <таблица> — бросок по указанной таблице\n"
                         "/tables — список доступных таблиц\n"
                         "/ping — проверка работы\n"
-                        "/reload — перезагрузить таблицы из файлов (только для владельца)\n"
                         "/help или !help — эта справка\n\n"
                         "**Комментарии:**\n"
                         "Добавьте `# текст` в конце команды для пояснения."
@@ -399,20 +454,7 @@ for event in longpoll.listen():
                 elif command == 'ping':
                     send_message(user_id, format_response(mention, "Pong! Бот работает."), peer_id)
 
-                elif command == 'reload':
-                    if OWNER_ID is None:
-                        send_message(user_id, "Команда /reload отключена (не задан OWNER_ID).", peer_id)
-                    elif user_id != OWNER_ID:
-                        send_message(user_id, "У вас нет прав на использование /reload.", peer_id)
-                    else:
-                        success = reload_tables()
-                        if success:
-                            send_message(user_id, "Таблицы успешно перезагружены из файлов.", peer_id)
-                        else:
-                            send_message(user_id, "Не удалось перезагрузить таблицы. Проверьте файлы в папке data/.", peer_id)
-
                 else:
-                    # Всё остальное — бросок кубиков
                     result, error = parse_and_roll_multiple(cmd_clean)
                     if error:
                         msg = format_response(mention, f"Ошибка: {error}")

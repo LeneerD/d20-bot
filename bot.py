@@ -42,13 +42,9 @@ def parse_and_roll(original_expr):
     Поддерживает как латинскую 'd', так и русскую 'д'.
     Возвращает кортеж (результат_в_виде_строки, сообщение_об_ошибке).
     """
-    # Сохраняем оригинальное выражение для вывода (то, что ввел пользователь)
     display_expr = original_expr.strip()
-    
-    # Приводим к нижнему регистру и заменяем русскую 'д' на 'd' для парсинга
     expr = original_expr.lower().replace(' ', '').replace('д', 'd')
     
-    # Если выражение начинается с d, добавляем 1
     if expr.startswith('d'):
         expr = '1' + expr
     
@@ -67,11 +63,9 @@ def parse_and_roll(original_expr):
     if num_dice <= 0 or dice_type <= 0:
         return None, "❌ Количество и тип кубика должны быть положительными"
     
-    # Генерируем броски
     rolls = [random.randint(1, dice_type) for _ in range(num_dice)]
     total = sum(rolls) + modifier
     
-    # Формируем детали в зависимости от количества кубиков
     if num_dice == 1:
         details = f"бросок: {rolls[0]}"
         if modifier:
@@ -82,7 +76,6 @@ def parse_and_roll(original_expr):
         if modifier:
             details += f" {modifier:+d}"
     
-    # Итоговая строка: 🎲 выражение → результат (детали)
     result_str = f"🎲 {display_expr} → **{total}** ({details})"
     return result_str, None
 
@@ -100,26 +93,31 @@ for event in longpoll.listen():
             if not text:
                 continue
             
-            # --- ОБРАБОТКА КОМАНД (все начинаются с /) ---
-            if text == '/help' or text == '/помощь':
-                help_text = (
-                    "🎲 **Команды бота:**\n\n"
-                    "/d20 или /д20 — бросить 20-гранный кубик\n"
-                    "/2d6+3 или /2д6+3 — бросить два шестигранных кубика с модификатором +3\n"
-                    "/d100-5 или /д100-5 — бросить 100-гранный кубик и вычесть 5\n"
-                    "/3d8 или /3д8 — бросить три восьмигранных кубика\n\n"
-                    "/ping — проверить работу бота\n"
-                    "/help или /помощь — показать эту справку"
-                )
-                send_message(user_id, help_text, peer_id)
-            
-            elif text == '/ping':
-                send_message(user_id, "🏓 Pong! Бот работает.", peer_id)
-            
-            elif text.startswith('/'):
-                # Убираем первый слеш, сохраняем оригинал для вывода
-                cmd = text[1:]
-                if cmd:
+            # --- ПРОВЕРКА НА КОМАНДУ (через / или !) ---
+            if text.startswith(('/', '!')):
+                # Убираем первый символ (слеш или восклицательный знак)
+                cmd = text[1:].strip()
+                
+                # Проверяем служебные команды
+                if cmd == 'help' or cmd == 'помощь':
+                    help_text = (
+                        "🎲 **Команды бота:**\n\n"
+                        "**Бросок кубиков** (можно через / или !):\n"
+                        "`/d20` или `!d20` — бросить 20-гранный кубик\n"
+                        "`/2d6+3` или `!2d6+3` — два кубика d6 +3\n"
+                        "`/d100-5` или `!d100-5` — d100 -5\n"
+                        "`/3d8` или `!3d8` — три кубика d8\n\n"
+                        "**Служебные:**\n"
+                        "`/ping` или `!ping` — проверка работы\n"
+                        "`/help` или `!help` — эта справка"
+                    )
+                    send_message(user_id, help_text, peer_id)
+                
+                elif cmd == 'ping':
+                    send_message(user_id, "🏓 Pong! Бот работает.", peer_id)
+                
+                elif cmd:
+                    # Любая другая команда считается выражением для броска
                     result, error = parse_and_roll(cmd)
                     if error:
                         send_message(user_id, error, peer_id)

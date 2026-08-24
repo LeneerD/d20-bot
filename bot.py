@@ -28,7 +28,6 @@ vk_session = vk_api.VkApi(token=VK_TOKEN)
 # 2. Повторные попытки подключения к LongPoll
 # ----------------------------------------------
 def init_longpoll_with_retry(session, group_id, retries=5, delay=3):
-    """Пытается инициализировать VkBotLongPoll с повторными попытками при ошибках."""
     for attempt in range(1, retries + 1):
         try:
             longpoll = VkBotLongPoll(session, group_id)
@@ -37,10 +36,9 @@ def init_longpoll_with_retry(session, group_id, retries=5, delay=3):
         except Exception as e:
             print(f"⚠️ Ошибка инициализации LongPoll (попытка {attempt}/{retries}): {e}")
             if attempt == retries:
-                raise  # Последняя попытка — поднимаем исключение
-            time.sleep(delay)  # Ждём перед повторной попыткой
+                raise
+            time.sleep(delay)
 
-# Инициализируем LongPoll с повторными попытками
 longpoll = init_longpoll_with_retry(vk_session, GROUP_ID)
 vk = vk_session.get_api()
 
@@ -67,8 +65,6 @@ def save_nicknames(data):
         print(f"⚠️ Ошибка сохранения nicknames.json: {e}")
 
 nicknames = load_nicknames()
-
-# Кеш для имён из VK
 user_cache = {}
 
 def get_user_name(user_id):
@@ -104,7 +100,21 @@ def send_message(user_id, message, peer_id=None):
         print(f"Ошибка отправки: {e}")
 
 # ----------------------------------------------
-# 4. Таблицы навыков (четыре таблицы)
+# 4. Утилита для извлечения комментария
+# ----------------------------------------------
+def extract_comment(cmd):
+    """
+    Извлекает комментарий после символа '#'.
+    Возвращает (очищенная_команда, комментарий_или_None)
+    """
+    if '#' in cmd:
+        # Находим последний #, чтобы позволить использовать # внутри комментария
+        clean, comment = cmd.rsplit('#', 1)
+        return clean.strip(), comment.strip()
+    return cmd, None
+
+# ----------------------------------------------
+# 5. Таблицы навыков (четыре таблицы)
 # ----------------------------------------------
 TABLES = {
     "melee": {
@@ -174,7 +184,7 @@ def roll_table(table_name):
     return result, None
 
 # ----------------------------------------------
-# 5. Основные функции команд
+# 6. Основные функции команд
 # ----------------------------------------------
 def flip_coin():
     return "Орёл!" if random.choice([True, False]) else "Решка!"
@@ -259,7 +269,7 @@ def parse_and_roll_multiple(expression):
     return result_str, None
 
 # ----------------------------------------------
-# 6. Главный цикл обработки сообщений
+# 7. Главный цикл обработки сообщений
 # ----------------------------------------------
 print("Бот успешно запущен и слушает сообщения...")
 
@@ -274,16 +284,29 @@ for event in longpoll.listen():
                 continue
 
             if text.startswith(('/', '!')):
-                cmd = text[1:].strip()
-                if not cmd:
+                cmd_raw = text[1:].strip()
+                if not cmd_raw:
                     msg = mention_user(user_id, peer_id) + "Введите команду. Например: /d20"
                     send_message(user_id, msg, peer_id)
                     continue
 
-                parts = cmd.split()
+                # --- Извлекаем комментарий ---
+                cmd_clean, comment = extract_comment(cmd_raw)
+
+                # Разбиваем очищенную команду на части
+                parts = cmd_clean.split()
+                if not parts:
+                    msg = mention_user(user_id, peer_id) + "Введите команду. Например: /d20"
+                    send_message(user_id, msg, peer_id)
+                    continue
+
                 command = parts[0].lower()
                 args = parts[1:] if len(parts) > 1 else []
 
+                # Формируем базовое сообщение с упоминанием
+                mention = mention_user(user_id, peer_id)
+
+                # --- Обработка команд ---
                 if command in ('help', 'помощь'):
                     help_text = (
                         "🎲 **Команды бота:**\n\n"
@@ -298,33 +321,38 @@ for event in longpoll.listen():
                         "/table <таблица> — бросок по указанной таблице\n"
                         "/tables — список доступных таблиц\n"
                         "/ping — проверка работы\n"
-                        "/help или !help — эта справка"
+                        "/help или !help — эта справка\n\n"
+                        "**Комментарии:**\n"
+                        "Добавьте `# текст` в конце команды для пояснения."
                     )
                     send_message(user_id, help_text, peer_id)
 
                 elif command in ('coin', 'монетка'):
                     result = flip_coin()
-                    mention = mention_user(user_id, peer_id)
                     msg = f"{mention}Бросок монетки: {result}"
+                    if comment:
+                        msg += f" (комментарий: {comment})"
                     send_message(user_id, msg, peer_id)
 
                 elif command in ('rand', 'random'):
                     result, error = random_number(args)
                     if error:
-                        msg = mention_user(user_id, peer_id) + "Ошибка: " + error
+                        msg = f"{mention}Ошибка: {error}"
                     else:
-                        mention = mention_user(user_id, peer_id)
                         msg = f"{mention}Результат: {result}"
+                        if comment:
+                            msg += f" (комментарий: {comment})"
                     send_message(user_id, msg, peer_id)
 
                 elif command in ('skill', 'навык'):
                     table_name = args[0].lower() if args else 'melee'
                     result, error = roll_table(table_name)
                     if error:
-                        msg = mention_user(user_id, peer_id) + "Ошибка: " + error
+                        msg = f"{mention}Ошибка: {error}"
                     else:
-                        mention = mention_user(user_id, peer_id)
                         msg = f"{mention}Бросок навыка ({table_name}): {result}"
+                        if comment:
+                            msg += f" (комментарий: {comment})"
                     send_message(user_id, msg, peer_id)
 
                 elif command == 'table':
@@ -335,28 +363,30 @@ for event in longpoll.listen():
                         table_name = args[0].lower()
                         result, error = roll_table(table_name)
                         if error:
-                            msg = "Ошибка: " + error
+                            msg = f"Ошибка: {error}"
                         else:
-                            mention = mention_user(user_id, peer_id)
                             msg = f"{mention}Бросок по таблице {table_name}: {result}"
-                    send_message(user_id, mention_user(user_id, peer_id) + msg, peer_id)
+                            if comment:
+                                msg += f" (комментарий: {comment})"
+                    send_message(user_id, mention + msg, peer_id)
 
                 elif command == 'tables':
                     available = ", ".join(TABLES.keys())
                     msg = f"Доступные таблицы: {available}"
-                    send_message(user_id, mention_user(user_id, peer_id) + msg, peer_id)
+                    send_message(user_id, mention + msg, peer_id)
 
                 elif command == 'ping':
-                    mention = mention_user(user_id, peer_id)
                     send_message(user_id, f"{mention}Pong! Бот работает.", peer_id)
 
                 else:
-                    result, error = parse_and_roll_multiple(cmd)
+                    # Всё остальное — бросок кубиков
+                    result, error = parse_and_roll_multiple(cmd_clean)
                     if error:
-                        msg = mention_user(user_id, peer_id) + "Ошибка: " + error
+                        msg = f"{mention}Ошибка: {error}"
                     else:
-                        mention = mention_user(user_id, peer_id)
                         msg = f"{mention}Бросок {result}"
+                        if comment:
+                            msg += f" (комментарий: {comment})"
                     send_message(user_id, msg, peer_id)
 
         except Exception as e:

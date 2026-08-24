@@ -28,16 +28,25 @@ vk = vk_session.get_api()
 NICKNAMES_FILE = "nicknames.json"
 
 def load_nicknames():
-    """Загружает словарь кастомных имён из JSON-файла."""
+    """Загружает словарь кастомных имён из JSON-файла. При ошибке возвращает {}."""
     if os.path.exists(NICKNAMES_FILE):
-        with open(NICKNAMES_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(NICKNAMES_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"⚠️ Ошибка чтения nicknames.json: {e}. Используется пустой словарь.")
+            # Можно заархивировать повреждённый файл
+            # os.rename(NICKNAMES_FILE, NICKNAMES_FILE + ".broken")
+            return {}
     return {}
 
 def save_nicknames(nicknames):
     """Сохраняет словарь кастомных имён в JSON-файл."""
-    with open(NICKNAMES_FILE, 'w', encoding='utf-8') as f:
-        json.dump(nicknames, f, ensure_ascii=False, indent=2)
+    try:
+        with open(NICKNAMES_FILE, 'w', encoding='utf-8') as f:
+            json.dump(nicknames, f, ensure_ascii=False, indent=2)
+    except IOError as e:
+        print(f"⚠️ Ошибка сохранения nicknames.json: {e}")
 
 # Загружаем кастомные имена при старте
 nicknames = load_nicknames()

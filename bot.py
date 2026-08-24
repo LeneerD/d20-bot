@@ -24,9 +24,6 @@ except ValueError:
 
 vk_session = vk_api.VkApi(token=VK_TOKEN)
 
-# ----------------------------------------------
-# 2. Повторные попытки подключения к LongPoll
-# ----------------------------------------------
 def init_longpoll_with_retry(session, group_id, retries=5, delay=3):
     for attempt in range(1, retries + 1):
         try:
@@ -43,7 +40,7 @@ longpoll = init_longpoll_with_retry(vk_session, GROUP_ID)
 vk = vk_session.get_api()
 
 # ----------------------------------------------
-# 3. Кастомные имена (nicknames.json)
+# 2. Кастомные имена (nicknames.json)
 # ----------------------------------------------
 NICKNAMES_FILE = "nicknames.json"
 
@@ -100,21 +97,16 @@ def send_message(user_id, message, peer_id=None):
         print(f"Ошибка отправки: {e}")
 
 # ----------------------------------------------
-# 4. Утилита для извлечения комментария
+# 3. Утилита для извлечения комментария
 # ----------------------------------------------
 def extract_comment(cmd):
-    """
-    Извлекает комментарий после символа '#'.
-    Возвращает (очищенная_команда, комментарий_или_None)
-    """
     if '#' in cmd:
-        # Находим последний #, чтобы позволить использовать # внутри комментария
         clean, comment = cmd.rsplit('#', 1)
         return clean.strip(), comment.strip()
     return cmd, None
 
 # ----------------------------------------------
-# 5. Таблицы навыков (четыре таблицы)
+# 4. Таблицы навыков (четыре таблицы) - без звёздочек
 # ----------------------------------------------
 TABLES = {
     "melee": {
@@ -171,6 +163,7 @@ TABLES = {
     }
 }
 
+# Убираем звёздочки в выводе таблицы
 def roll_table(table_name):
     if table_name not in TABLES:
         available = ", ".join(TABLES.keys())
@@ -180,11 +173,11 @@ def roll_table(table_name):
     roll2 = random.randint(1, 6)
     total = roll1 + roll2
     name, description = table[total]
-    result = f"2d6 → {roll1}+{roll2} = **{total}** — *{name}* — {description}"
+    result = f"2d6 → {roll1}+{roll2} = {total} — {name} — {description}"
     return result, None
 
 # ----------------------------------------------
-# 6. Основные функции команд
+# 5. Основные функции команд
 # ----------------------------------------------
 def flip_coin():
     return "Орёл!" if random.choice([True, False]) else "Решка!"
@@ -269,7 +262,7 @@ def parse_and_roll_multiple(expression):
     return result_str, None
 
 # ----------------------------------------------
-# 7. Главный цикл обработки сообщений
+# 6. Главный цикл (с упоминанием, без звёздочек в таблице)
 # ----------------------------------------------
 print("Бот успешно запущен и слушает сообщения...")
 
@@ -290,10 +283,7 @@ for event in longpoll.listen():
                     send_message(user_id, msg, peer_id)
                     continue
 
-                # --- Извлекаем комментарий ---
                 cmd_clean, comment = extract_comment(cmd_raw)
-
-                # Разбиваем очищенную команду на части
                 parts = cmd_clean.split()
                 if not parts:
                     msg = mention_user(user_id, peer_id) + "Введите команду. Например: /d20"
@@ -303,10 +293,9 @@ for event in longpoll.listen():
                 command = parts[0].lower()
                 args = parts[1:] if len(parts) > 1 else []
 
-                # Формируем базовое сообщение с упоминанием
+                # Упоминание добавляем везде, где нужен автор
                 mention = mention_user(user_id, peer_id)
 
-                # --- Обработка команд ---
                 if command in ('help', 'помощь'):
                     help_text = (
                         "🎲 **Команды бота:**\n\n"
@@ -379,7 +368,6 @@ for event in longpoll.listen():
                     send_message(user_id, f"{mention}Pong! Бот работает.", peer_id)
 
                 else:
-                    # Всё остальное — бросок кубиков
                     result, error = parse_and_roll_multiple(cmd_clean)
                     if error:
                         msg = f"{mention}Ошибка: {error}"

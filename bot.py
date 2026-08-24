@@ -30,7 +30,8 @@ def get_user_name(user_id):
         try:
             user = vk.users.get(user_ids=user_id, fields=[])
             if user:
-                user_cache[user_id] = f"{user[0]['first_name']}"
+                # Исправлено: только имя, без фамилии
+                user_cache[user_id] = user[0]['first_name']
             else:
                 user_cache[user_id] = f"Пользователь {user_id}"
         except:
@@ -61,7 +62,7 @@ def flip_coin():
     return "Орёл!" if random.choice([True, False]) else "Решка!"
 
 # ----------------------------------------------
-# 2. Случайное число (исправлено)
+# 2. Случайное число
 # ----------------------------------------------
 def random_number(args):
     if not args:
@@ -81,7 +82,7 @@ def random_number(args):
         return None, "Укажите два числа через пробел. Пример: /rand 1 100"
 
 # ----------------------------------------------
-# 3. Бросок нескольких кубиков (исправлено форматирование)
+# 3. Бросок нескольких кубиков
 # ----------------------------------------------
 def parse_and_roll_multiple(expression):
     expr = expression.lower().replace(' ', '').replace('д', 'd')
@@ -142,8 +143,8 @@ def parse_and_roll_multiple(expression):
         return None, "Не удалось разобрать выражение"
 
     details_str = " ".join(details)
-    # Исправлено: убрано слово "результат" (добавится в основном цикле), и `**` вместо `__`
-    result_str = f"{expression} → **{total}** ({details_str})"
+    # Исправлено: добавлено слово "результат" и звёздочки с пробелами
+    result_str = f"{expression} → результат * {total} * ({details_str})"
     return result_str, None
 
 # ----------------------------------------------

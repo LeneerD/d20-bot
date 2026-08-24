@@ -36,19 +36,23 @@ def send_message(user_id, message, peer_id=None):
         print(f"Ошибка отправки: {e}")
 
 
-def parse_and_roll(expression):
+def parse_and_roll(original_expr):
     """
     Парсит выражение вида d20, 2d6+3 и возвращает результат.
-    Поддерживает как латинскую 'd', так и русскую 'д' (заменяется на 'd').
+    Поддерживает как латинскую 'd', так и русскую 'д'.
+    Возвращает кортеж (результат_в_виде_строки, сообщение_об_ошибке).
     """
-    # Приводим к нижнему регистру и заменяем русскую 'д' на 'd'
-    expression = expression.lower().replace(' ', '').replace('д', 'd')
+    # Сохраняем оригинальное выражение для вывода (то, что ввел пользователь)
+    display_expr = original_expr.strip()
+    
+    # Приводим к нижнему регистру и заменяем русскую 'д' на 'd' для парсинга
+    expr = original_expr.lower().replace(' ', '').replace('д', 'd')
     
     # Если выражение начинается с d, добавляем 1
-    if expression.startswith('d'):
-        expression = '1' + expression
+    if expr.startswith('d'):
+        expr = '1' + expr
     
-    match = re.match(r'^(\d+)d(\d+)([+-]\d+)?$', expression)
+    match = re.match(r'^(\d+)d(\d+)([+-]\d+)?$', expr)
     if not match:
         return None, "❌ Неверный формат. Примеры: /d20, /2d6+3, /д100-5"
     
@@ -63,15 +67,23 @@ def parse_and_roll(expression):
     if num_dice <= 0 or dice_type <= 0:
         return None, "❌ Количество и тип кубика должны быть положительными"
     
+    # Генерируем броски
     rolls = [random.randint(1, dice_type) for _ in range(num_dice)]
     total = sum(rolls) + modifier
     
+    # Формируем детали в зависимости от количества кубиков
     if num_dice == 1:
-        result_str = f"🎲 **{total}** (бросок: {rolls[0]}" + (f" {modifier:+d}" if modifier else "") + ")"
+        details = f"бросок: {rolls[0]}"
+        if modifier:
+            details += f" {modifier:+d}"
     else:
         rolls_str = ", ".join(map(str, rolls))
-        result_str = f"🎲 **{total}** (броски: {rolls_str}" + (f" {modifier:+d}" if modifier else "") + ")"
+        details = f"броски: {rolls_str}"
+        if modifier:
+            details += f" {modifier:+d}"
     
+    # Итоговая строка: 🎲 выражение → результат (детали)
+    result_str = f"🎲 {display_expr} → **{total}** ({details})"
     return result_str, None
 
 
@@ -105,11 +117,9 @@ for event in longpoll.listen():
                 send_message(user_id, "🏓 Pong! Бот работает.", peer_id)
             
             elif text.startswith('/'):
-                # Убираем первый слеш
+                # Убираем первый слеш, сохраняем оригинал для вывода
                 cmd = text[1:]
                 if cmd:
-                    # Заменяем все русские 'д' на латинские 'd' для единообразия
-                    cmd = cmd.replace('д', 'd')
                     result, error = parse_and_roll(cmd)
                     if error:
                         send_message(user_id, error, peer_id)

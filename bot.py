@@ -23,11 +23,9 @@ vk_session = vk_api.VkApi(token=VK_TOKEN)
 longpoll = VkBotLongPoll(vk_session, GROUP_ID)
 vk = vk_session.get_api()
 
-# Кеш для имён пользователей
 user_cache = {}
 
 def get_user_name(user_id):
-    """Возвращает имя пользователя по его ID (с кешированием)"""
     if user_id not in user_cache:
         try:
             user = vk.users.get(user_ids=user_id, fields=[])
@@ -40,11 +38,7 @@ def get_user_name(user_id):
     return user_cache[user_id]
 
 def mention_user(user_id, peer_id):
-    """
-    Возвращает строку с упоминанием пользователя, если это беседа.
-    В личке возвращает пустую строку (обращение не нужно).
-    """
-    if peer_id != user_id:  # если peer_id отличается от user_id — это беседа
+    if peer_id != user_id:
         name = get_user_name(user_id)
         return f"[id{user_id}|{name}], "
     return ""
@@ -67,12 +61,12 @@ def flip_coin():
     return "Орёл!" if random.choice([True, False]) else "Решка!"
 
 # ----------------------------------------------
-# 2. Случайное число
+# 2. Случайное число (исправлено)
 # ----------------------------------------------
 def random_number(args):
     if not args:
         num = random.randint(0, 100)
-        return f"🔢 Случайное число от 0 до 100: **{num}**"
+        return f"🔢 Случайное число от 0 до 100: **{num}**", None
     if len(args) == 2:
         try:
             a = int(args[0])
@@ -80,20 +74,16 @@ def random_number(args):
             if a > b:
                 a, b = b, a
             num = random.randint(a, b)
-            return f"🔢 Случайное число от {a} до {b}: **{num}**"
+            return f"🔢 Случайное число от {a} до {b}: **{num}**", None
         except ValueError:
             return None, "Ошибка: введите два целых числа. Пример: /rand 1 100"
     else:
         return None, "Укажите два числа через пробел. Пример: /rand 1 100"
 
 # ----------------------------------------------
-# 3. Бросок нескольких кубиков
+# 3. Бросок нескольких кубиков (исправлено форматирование)
 # ----------------------------------------------
 def parse_and_roll_multiple(expression):
-    """
-    Принимает выражение вида "2d6+1d20+5" или "d20-3"
-    Возвращает (результат_в_виде_строки, сообщение_об_ошибке)
-    """
     expr = expression.lower().replace(' ', '').replace('д', 'd')
     if not expr:
         return None, "Пустое выражение"
@@ -152,8 +142,8 @@ def parse_and_roll_multiple(expression):
         return None, "Не удалось разобрать выражение"
 
     details_str = " ".join(details)
-    # Возвращаем результат без упоминания и со словом "бросок"
-    result_str = f"{expression} → результат __{total}__ ({details_str})"
+    # Исправлено: убрано слово "результат" (добавится в основном цикле), и `**` вместо `__`
+    result_str = f"{expression} → **{total}** ({details_str})"
     return result_str, None
 
 # ----------------------------------------------
@@ -171,11 +161,9 @@ for event in longpoll.listen():
             if not text:
                 continue
 
-            # Проверяем, начинается ли сообщение с / или !
             if text.startswith(('/', '!')):
                 cmd = text[1:].strip()
                 if not cmd:
-                    # Пустая команда — просто напоминаем
                     msg = mention_user(user_id, peer_id) + "Введите команду. Например: /d20"
                     send_message(user_id, msg, peer_id)
                     continue
@@ -184,7 +172,6 @@ for event in longpoll.listen():
                 command = parts[0].lower()
                 args = parts[1:] if len(parts) > 1 else []
 
-                # --- Обработка команд ---
                 if command in ('help', 'помощь'):
                     help_text = (
                         "🎲 **Команды бота:**\n\n"
@@ -198,12 +185,10 @@ for event in longpoll.listen():
                         "/ping — проверка работы\n"
                         "/help или !help — эта справка"
                     )
-                    # Справку отправляем без упоминания (или можно с упоминанием, но не обязательно)
                     send_message(user_id, help_text, peer_id)
 
                 elif command in ('coin', 'монетка'):
                     result = flip_coin()
-                    # Формируем сообщение с упоминанием и словом "бросок"
                     mention = mention_user(user_id, peer_id)
                     msg = f"{mention}Бросок монетки: {result}"
                     send_message(user_id, msg, peer_id)
@@ -223,7 +208,6 @@ for event in longpoll.listen():
                     send_message(user_id, f"{mention}Pong! Бот работает.", peer_id)
 
                 else:
-                    # Любая другая команда — бросок кубиков
                     result, error = parse_and_roll_multiple(cmd)
                     if error:
                         msg = mention_user(user_id, peer_id) + "Ошибка: " + error
@@ -236,7 +220,6 @@ for event in longpoll.listen():
         except Exception as e:
             print(f"Ошибка в цикле: {e}")
             try:
-                # Отправляем сообщение об ошибке с упоминанием
                 mention = mention_user(user_id, peer_id)
                 send_message(user_id, f"{mention}⚠️ Произошла ошибка. Попробуйте позже.", peer_id)
             except:

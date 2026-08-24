@@ -1,4 +1,5 @@
 import os
+import json
 import vk_api
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 import random
@@ -23,14 +24,36 @@ vk_session = vk_api.VkApi(token=VK_TOKEN)
 longpoll = VkBotLongPoll(vk_session, GROUP_ID)
 vk = vk_session.get_api()
 
-user_cache = {}
+# ---------- Кастомные имена ----------
+NICKNAMES_FILE = "nicknames.json"
+
+def load_nicknames():
+    """Загружает словарь кастомных имён из JSON-файла."""
+    if os.path.exists(NICKNAMES_FILE):
+        with open(NICKNAMES_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+def save_nicknames(nicknames):
+    """Сохраняет словарь кастомных имён в JSON-файл."""
+    with open(NICKNAMES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(nicknames, f, ensure_ascii=False, indent=2)
+
+# Загружаем кастомные имена при старте
+nicknames = load_nicknames()
+
+user_cache = {}  # кеш для стандартных имён
 
 def get_user_name(user_id):
+    user_id_str = str(user_id)
+    # Если есть кастомное имя — используем его
+    if user_id_str in nicknames:
+        return nicknames[user_id_str]
+    # Иначе — стандартное имя (только имя, без фамилии)
     if user_id not in user_cache:
         try:
             user = vk.users.get(user_ids=user_id, fields=[])
             if user:
-                # Исправлено: только имя, без фамилии
                 user_cache[user_id] = user[0]['first_name']
             else:
                 user_cache[user_id] = f"Пользователь {user_id}"
@@ -143,7 +166,6 @@ def parse_and_roll_multiple(expression):
         return None, "Не удалось разобрать выражение"
 
     details_str = " ".join(details)
-    # Исправлено: добавлено слово "результат" и звёздочки с пробелами
     result_str = f"{expression} → результат * {total} * ({details_str})"
     return result_str, None
 

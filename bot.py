@@ -16,23 +16,17 @@ VK_TOKEN = os.environ.get("VK_TOKEN")
 GROUP_ID = os.environ.get("GROUP_ID")
 OWNER_ID = os.environ.get("OWNER_ID")
 
-if not VK_TOKEN:
-    raise Exception("Переменная окружения VK_TOKEN не задана!")
-if not GROUP_ID:
-    raise Exception("Переменная окружения GROUP_ID не задана!")
-if not OWNER_ID:
-    logger.warning("OWNER_ID не задан – команда /reload будет недоступна")
-else:
-    try:
-        OWNER_ID = int(OWNER_ID)
-    except ValueError:
-        logger.error("OWNER_ID должен быть целым числом!")
-        OWNER_ID = None
+if not VK_TOKEN or not GROUP_ID:
+    raise Exception("VK_TOKEN и GROUP_ID должны быть заданы в переменных окружения!")
 
 try:
     GROUP_ID = int(GROUP_ID)
+    OWNER_ID = int(OWNER_ID) if OWNER_ID else None
 except ValueError:
-    raise Exception("GROUP_ID должен быть целым числом!")
+    raise Exception("GROUP_ID и OWNER_ID должны быть целыми числами!")
+
+if OWNER_ID is None:
+    logger.warning("OWNER_ID не задан – команда /reload будет недоступна")
 
 # ---- Инициализация VK ----
 vk_session = vk_api.VkApi(token=VK_TOKEN)
@@ -52,18 +46,15 @@ def init_longpoll_with_retry(session, group_id, retries=5, delay=3):
 longpoll = init_longpoll_with_retry(vk_session, GROUP_ID)
 vk = vk_session.get_api()
 
-# ---- Кастомные имена (nicknames.json) ----
+# ---- Утилиты ----
 NICKNAMES_FILE = "nicknames.json"
 
 def load_nicknames():
-    if os.path.exists(NICKNAMES_FILE):
-        try:
-            with open(NICKNAMES_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            logger.error(f"Ошибка чтения nicknames.json: {e}. Используется пустой словарь.")
-            return {}
-    return {}
+    try:
+        with open(NICKNAMES_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, IOError):
+        return {}
 
 def save_nicknames(data):
     try:
@@ -81,20 +72,15 @@ def get_user_name(user_id):
         return nicknames[user_id_str]
     if user_id not in user_cache:
         try:
-            user = vk.users.get(user_ids=user_id, fields=[])
-            if user:
-                user_cache[user_id] = user[0]['first_name']
-            else:
-                user_cache[user_id] = f"Пользователь {user_id}"
-        except Exception as e:
-            logger.error(f"Ошибка получения имени пользователя {user_id}: {e}")
+            user = vk.users.get(user_ids=user_id, fields=[])[0]
+            user_cache[user_id] = user['first_name']
+        except:
             user_cache[user_id] = f"Пользователь {user_id}"
     return user_cache[user_id]
 
 def mention_user(user_id, peer_id):
     if peer_id != user_id:
-        name = get_user_name(user_id)
-        return f"[id{user_id}|{name}], "
+        return f"[id{user_id}|{get_user_name(user_id)}], "
     return ""
 
 def send_message(user_id, message, peer_id=None):
@@ -106,127 +92,74 @@ def send_message(user_id, message, peer_id=None):
             random_id=0
         )
     except Exception as e:
-        logger.error(f"Ошибка отправки сообщения: {e}")
+        logger.error(f"Ошибка отправки: {e}")
 
 def format_response(mention, result, comment=None):
     if comment:
         return f"{mention}{result} (комментарий: {comment})"
     return f"{mention}{result}"
 
-# ---- Загрузка таблиц из файлов в корне ----
-TABLES_FILE = "tables.json"
-INJURY_FILE = "injury.json"
-SPARK_FILE = "spark.json"
-
-def load_json_file(filename, default=None):
-    if os.path.exists(filename):
-        try:
-            with open(filename, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                logger.info(f"Загружен файл {filename}")
-                return data
-        except (json.JSONDecodeError, IOError) as e:
-            logger.error(f"Ошибка чтения {filename}: {e}. Данные не загружены.")
-            return default if default is not None else {}
-    else:
-        logger.warning(f"Файл {filename} не найден.")
-        return default if default is not None else {}
-
-TABLES = load_json_file(TABLES_FILE)
-INJURY_TABLE = load_json_file(INJURY_FILE)
-SPARK_TABLE = load_json_file(SPARK_FILE)
-SPARK_MAX_KEY = max(map(int, SPARK_TABLE.keys())) if SPARK_TABLE else 0
-
-def reload_tables():
-    global TABLES, INJURY_TABLE, SPARK_TABLE, SPARK_MAX_KEY
-    new_tables = load_json_file(TABLES_FILE)
-    new_injury = load_json_file(INJURY_FILE)
-    new_spark = load_json_file(SPARK_FILE)
-    if new_tables:
-        TABLES = new_tables
-    if new_injury:
-        INJURY_TABLE = new_injury
-    if new_spark:
-        SPARK_TABLE = new_spark
-        SPARK_MAX_KEY = max(map(int, SPARK_TABLE.keys())) if SPARK_TABLE else 0
-    return bool(new_tables) or bool(new_injury) or bool(new_spark)
-
-# ---- Утилита для извлечения комментария ----
 def extract_comment(cmd):
     if '#' in cmd:
         clean, comment = cmd.rsplit('#', 1)
         return clean.strip(), comment.strip()
     return cmd, None
 
-# ---- Функции для работы с таблицами ----
-def roll_table(table_name):
-    if not TABLES:
-        return None, "Таблицы навыков не загружены. Проверьте наличие файла tables.json."
-    if table_name not in TABLES:
-        available = ", ".join(TABLES.keys())
-        return None, f"Таблица '{table_name}' не найдена. Доступные: {available}"
-    table = TABLES[table_name]
-    roll1 = random.randint(1, 6)
-    roll2 = random.randint(1, 6)
-    total = roll1 + roll2
-    entry = table.get(str(total))
-    if entry is None:
-        return None, f"Ошибка: для суммы {total} нет записи в таблице."
-    name, description = entry
-    result = f"2d6 → {roll1}+{roll2} = {total} — {name} — {description}"
-    return result, None
+# ---- Загрузчик таблиц ----
+TABLE_FILES = {
+    "tables": "tables.json",
+    "injury": "injury.json",
+    "spark": "spark.json",
+    "exploration": "exploration.json"
+}
 
-def get_injury_description(result):
-    if not INJURY_TABLE:
-        return "Ошибка", "Таблица ранений не загружена. Проверьте наличие файла injury.json."
-    key = str(result)
-    if key in INJURY_TABLE:
-        entry = INJURY_TABLE[key]
-        if isinstance(entry, list) and len(entry) >= 2:
-            return entry[0], entry[1]
-    return "Unknown Injury", "No description available."
+def load_json_file(filename, default=None):
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            logger.info(f"Загружен файл {filename}")
+            return data
+    except FileNotFoundError:
+        logger.warning(f"Файл {filename} не найден")
+    except (json.JSONDecodeError, IOError) as e:
+        logger.error(f"Ошибка чтения {filename}: {e}")
+    return default if default is not None else {}
 
-def roll_injury():
-    units = random.randint(1, 6)
-    tens = random.randint(1, 6)
-    result = tens * 10 + units
-    name, desc = get_injury_description(result)
-    return result, units, tens, name, desc
+# Глобальные таблицы
+TABLES = load_json_file(TABLE_FILES["tables"])
+INJURY_TABLE = load_json_file(TABLE_FILES["injury"])
+SPARK_TABLE = load_json_file(TABLE_FILES["spark"])
+EXPLORATION_DATA = load_json_file(TABLE_FILES["exploration"])
+EXPLORATION_TABLES = {
+    "common": EXPLORATION_DATA.get("common", {}),
+    "rare": EXPLORATION_DATA.get("rare", {}),
+    "legendary": EXPLORATION_DATA.get("legendary", {})
+}
+SPARK_MAX_KEY = max(map(int, SPARK_TABLE.keys())) if SPARK_TABLE else 0
 
-def roll_spark(number=None):
-    if not SPARK_TABLE:
-        return None, "Таблица Spark не загружена. Проверьте наличие файла spark.json."
-    if number is not None:
-        key = str(number)
-        if key in SPARK_TABLE:
-            return number, SPARK_TABLE[key]
-        else:
-            return None, f"Запись с номером {number} не найдена."
-    roll = random.randint(1, SPARK_MAX_KEY)
-    return roll, SPARK_TABLE[str(roll)]
+def reload_tables():
+    global TABLES, INJURY_TABLE, SPARK_TABLE, SPARK_MAX_KEY, EXPLORATION_TABLES
+    tables = load_json_file(TABLE_FILES["tables"])
+    injury = load_json_file(TABLE_FILES["injury"])
+    spark = load_json_file(TABLE_FILES["spark"])
+    exploration = load_json_file(TABLE_FILES["exploration"])
+    if tables:
+        TABLES = tables
+    if injury:
+        INJURY_TABLE = injury
+    if spark:
+        SPARK_TABLE = spark
+        SPARK_MAX_KEY = max(map(int, SPARK_TABLE.keys())) if SPARK_TABLE else 0
+    if exploration:
+        EXPLORATION_TABLES = {
+            "common": exploration.get("common", {}),
+            "rare": exploration.get("rare", {}),
+            "legendary": exploration.get("legendary", {})
+        }
+    return any((tables, injury, spark, exploration))
 
 # ---- Основные функции команд ----
-def flip_coin():
-    return "Орёл!" if random.choice([True, False]) else "Решка!"
-
-def random_number(args):
-    if not args:
-        num = random.randint(0, 100)
-        return f"🔢 Случайное число от 0 до 100: **{num}**", None
-    if len(args) == 2:
-        try:
-            a = int(args[0])
-            b = int(args[1])
-            if a > b:
-                a, b = b, a
-            num = random.randint(a, b)
-            return f"🔢 Случайное число от {a} до {b}: **{num}**", None
-        except ValueError:
-            return None, "Ошибка: введите два целых числа. Пример: /rand 1 100"
-    else:
-        return None, "Укажите два числа через пробел. Пример: /rand 1 100"
-
-def parse_and_roll_multiple(expression):
+def roll_dice(expression):
     expr = expression.lower().replace(' ', '').replace('д', 'd')
     if not expr:
         return None, "Пустое выражение"
@@ -248,49 +181,136 @@ def parse_and_roll_multiple(expression):
 
         if 'd' in part:
             if part.startswith('d'):
-                num_dice = 1
-                dice_type = int(part[1:])
+                num, dice = 1, int(part[1:])
             else:
-                num_dice_str, dice_type_str = part.split('d')
-                num_dice = int(num_dice_str) if num_dice_str else 1
-                dice_type = int(dice_type_str)
+                num_str, dice_str = part.split('d')
+                num = int(num_str) if num_str else 1
+                dice = int(dice_str)
 
-            if num_dice > 100:
-                return None, "Слишком много кубиков (макс. 100)"
-            if dice_type > 1000:
-                return None, "Слишком большой кубик (макс. d1000)"
-            if num_dice <= 0 or dice_type <= 0:
-                return None, "Количество и тип кубика должны быть положительными"
+            if num > 100 or dice > 1000 or num <= 0 or dice <= 0:
+                return None, "Некорректные параметры кубиков (макс: 100 шт, d1000)"
 
-            rolls = [random.randint(1, dice_type) for _ in range(num_dice)]
+            rolls = [random.randint(1, dice) for _ in range(num)]
             subtotal = sum(rolls) * sign
             total += subtotal
-
-            if num_dice == 1:
-                detail = f"{part}={rolls[0]}"
-            else:
-                detail = f"{part}=({', '.join(map(str, rolls))})"
+            detail = f"{part}=({','.join(map(str, rolls))})" if num > 1 else f"{part}={rolls[0]}"
             if sign == -1:
                 detail = '-' + detail
             details.append(detail)
         else:
-            value = int(part) * sign
-            total += value
-            if value > 0:
-                details.append(f"+{value}")
-            elif value < 0:
-                details.append(f"{value}")
+            val = int(part) * sign
+            total += val
+            if val > 0:
+                details.append(f"+{val}")
+            elif val < 0:
+                details.append(str(val))
 
-    if not details:
-        return None, "Не удалось разобрать выражение"
+    return f"{expression} → результат * {total} * ({' '.join(details)})", None
 
-    details_str = " ".join(details)
-    result_str = f"{expression} → результат * {total} * ({details_str})"
-    return result_str, None
+def roll_table(table_name):
+    if not TABLES:
+        return None, "Таблицы навыков не загружены."
+    if table_name not in TABLES:
+        return None, f"Таблица '{table_name}' не найдена. Доступны: {', '.join(TABLES.keys())}"
+
+    roll1, roll2 = random.randint(1, 6), random.randint(1, 6)
+    total = roll1 + roll2
+    entry = TABLES[table_name].get(str(total))
+    if not entry:
+        return None, f"Для суммы {total} нет записи в таблице."
+
+    name, desc = entry if isinstance(entry, list) and len(entry) >= 2 else (entry, "")
+    return f"2d6 → {roll1}+{roll2} = {total} — {name} — {desc}", None
+
+def roll_spark(number=None):
+    if not SPARK_TABLE:
+        return None, "Таблица Spark не загружена."
+    if number is not None:
+        key = str(number)
+        return (number, SPARK_TABLE[key]) if key in SPARK_TABLE else (None, f"Запись {number} не найдена")
+    roll = random.randint(1, SPARK_MAX_KEY)
+    return roll, SPARK_TABLE[str(roll)]
+
+def roll_exploration(category, num_dice=3):
+    if category not in EXPLORATION_TABLES:
+        return None, f"Неизвестная категория '{category}'. Доступны: common, rare, legendary"
+    table = EXPLORATION_TABLES[category]
+    if not table:
+        return None, f"Таблица '{category}' не загружена."
+
+    rolls = [random.randint(1, 6) for _ in range(max(1, num_dice))]
+    total = sum(rolls)
+    desc = table.get(str(total))
+    result = f"Бросок {len(rolls)}d6: {', '.join(map(str, rolls))} = **{total}**\nДукаты: **{total * 10}**"
+    if desc:
+        result += f"\nОписание: {desc}"
+    return result, None
+
+def roll_injury():
+    units, tens = random.randint(1, 6), random.randint(1, 6)
+    result = tens * 10 + units
+    entry = INJURY_TABLE.get(str(result), ["Unknown", "No description"])
+    return result, units, tens, entry[0], entry[1]
+
+def flip_coin():
+    return "Орёл!" if random.choice([True, False]) else "Решка!"
+
+def random_number(args):
+    if not args:
+        return f"🔢 Случайное число от 0 до 100: **{random.randint(0, 100)}**", None
+    if len(args) == 2:
+        try:
+            a, b = sorted(map(int, args[:2]))
+            return f"🔢 Случайное число от {a} до {b}: **{random.randint(a, b)}**", None
+        except ValueError:
+            return None, "Введите два целых числа. Пример: /rand 1 100"
+    return None, "Укажите два числа через пробел. Пример: /rand 1 100"
+
+# ---- Обработчики команд ----
+def cmd_help(user_id, peer_id, mention, args, comment):
+    help_text = (
+        "🎲 **Команды бота:**\n\n"
+        "**Бросок кубиков** (можно через / или !):\n"
+        "/d20 или !d20 — бросить 20-гранный кубик\n"
+        "/2d6+1d20+5 — несколько кубиков разных типов\n"
+        "/d100-3 — d100 с модификатором\n\n"
+        "**Специальные команды:**\n"
+        "/coin или /монетка — подбросить монетку\n"
+        "/rand 1 100 — случайное число в диапазоне\n"
+        "/inj или /ранение — бросок на ранение по таблице Elites Injury Chart\n"
+        "/spark [номер] — показать описание прокачки Spark (если номер не указан — случайный бросок)\n"
+        "/skill [таблица] — бросок 2d6 по таблице прокачки Trench Crusade (по умолчанию melee)\n"
+        "/table <таблица> — бросок по указанной таблице\n"
+        "/tables — список доступных таблиц\n"
+        "/exp <common|rare|legendary> [кубики] — бросок по таблице Exploration (по умолчанию 3 кубика)\n"
+        "/ping — проверка работы\n"
+        "/reload — перезагрузить таблицы (только для владельца)\n"
+        "/help — эта справка\n\n"
+        "**Комментарии:**\nДобавьте `# текст` в конце команды для пояснения."
+    )
+    send_message(user_id, help_text, peer_id)
+
+COMMAND_HANDLERS = {
+    "help": cmd_help,
+    "помощь": cmd_help,
+    "coin": lambda u, p, m, a, c: send_message(u, format_response(m, f"Бросок монетки: {flip_coin()}", c), p),
+    "монетка": lambda u, p, m, a, c: send_message(u, format_response(m, f"Бросок монетки: {flip_coin()}", c), p),
+    "rand": lambda u, p, m, a, c: send_message(u, format_response(m, f"Результат: {random_number(a)[0]}" if random_number(a)[0] else f"Ошибка: {random_number(a)[1]}", c), p),
+    "random": lambda u, p, m, a, c: send_message(u, format_response(m, f"Результат: {random_number(a)[0]}" if random_number(a)[0] else f"Ошибка: {random_number(a)[1]}", c), p),
+    "inj": lambda u, p, m, a, c: send_message(u, format_response(m, f"Бросок на ранение: {roll_injury()[2]}+{roll_injury()[1]} = **{roll_injury()[0]}** — *{roll_injury()[3]}* — {roll_injury()[4]}", c), p),
+    "ранение": lambda u, p, m, a, c: send_message(u, format_response(m, f"Бросок на ранение: {roll_injury()[2]}+{roll_injury()[1]} = **{roll_injury()[0]}** — *{roll_injury()[3]}* — {roll_injury()[4]}", c), p),
+    "injury": lambda u, p, m, a, c: send_message(u, format_response(m, f"Бросок на ранение: {roll_injury()[2]}+{roll_injury()[1]} = **{roll_injury()[0]}** — *{roll_injury()[3]}* — {roll_injury()[4]}", c), p),
+    "spark": lambda u, p, m, a, c: send_message(u, format_response(m, f"Бросок d{SPARK_MAX_KEY}: **{roll_spark(int(a[0]) if a else None)[0]}** — {roll_spark(int(a[0]) if a else None)[1]}" if roll_spark(int(a[0]) if a else None)[0] else f"Ошибка: {roll_spark(int(a[0]) if a else None)[1]}", c), p),
+    "skill": lambda u, p, m, a, c: send_message(u, format_response(m, f"Бросок навыка ({a[0] if a else 'melee'}): {roll_table(a[0] if a else 'melee')[0]}" if roll_table(a[0] if a else 'melee')[0] else f"Ошибка: {roll_table(a[0] if a else 'melee')[1]}", c), p),
+    "навык": lambda u, p, m, a, c: send_message(u, format_response(m, f"Бросок навыка ({a[0] if a else 'melee'}): {roll_table(a[0] if a else 'melee')[0]}" if roll_table(a[0] if a else 'melee')[0] else f"Ошибка: {roll_table(a[0] if a else 'melee')[1]}", c), p),
+    "table": lambda u, p, m, a, c: send_message(u, format_response(m, f"Бросок по таблице {a[0]}: {roll_table(a[0])[0]}" if a and roll_table(a[0])[0] else "Укажите таблицу или проверьте её наличие" if not a else f"Ошибка: {roll_table(a[0])[1]}", c), p),
+    "tables": lambda u, p, m, a, c: send_message(u, format_response(m, f"Доступные таблицы: {', '.join(TABLES.keys())}" if TABLES else "Таблицы не загружены", c), p),
+    "ping": lambda u, p, m, a, c: send_message(u, format_response(m, "Pong! Бот работает."), p),
+    "reload": lambda u, p, m, a, c: send_message(u, format_response(m, "Таблицы перезагружены" if reload_tables() else "Ошибка перезагрузки"), p) if OWNER_ID and u == OWNER_ID else send_message(u, format_response(m, "У вас нет прав на /reload"), p) if OWNER_ID else send_message(u, format_response(m, "Команда отключена (OWNER_ID не задан)"), p)
+}
 
 # ---- Главный цикл ----
 logger.info("Бот успешно запущен и слушает сообщения...")
-
 for event in longpoll.listen():
     if event.type == VkBotEventType.MESSAGE_NEW:
         try:
@@ -298,144 +318,33 @@ for event in longpoll.listen():
             user_id = event.object.message['from_id']
             text = event.object.message['text'].strip()
 
-            if not text:
+            if not text or not text.startswith(('/', '!')):
                 continue
 
-            if text.startswith(('/', '!')):
-                cmd_raw = text[1:].strip()
-                if not cmd_raw:
-                    msg = format_response(mention_user(user_id, peer_id), "Введите команду. Например: /d20")
-                    send_message(user_id, msg, peer_id)
-                    continue
+            cmd_raw = text[1:].strip()
+            if not cmd_raw:
+                send_message(user_id, format_response(mention_user(user_id, peer_id), "Введите команду. Например: /d20"), peer_id)
+                continue
 
-                cmd_clean, comment = extract_comment(cmd_raw)
-                parts = cmd_clean.split()
-                if not parts:
-                    msg = format_response(mention_user(user_id, peer_id), "Введите команду. Например: /d20")
-                    send_message(user_id, msg, peer_id)
-                    continue
+            cmd_clean, comment = extract_comment(cmd_raw)
+            parts = cmd_clean.split()
+            if not parts:
+                send_message(user_id, format_response(mention_user(user_id, peer_id), "Введите команду. Например: /d20"), peer_id)
+                continue
 
-                command = parts[0].lower()
-                args = parts[1:] if len(parts) > 1 else []
+            command = parts[0].lower()
+            args = parts[1:] if len(parts) > 1 else []
+            mention = mention_user(user_id, peer_id)
 
-                mention = mention_user(user_id, peer_id)
-
-                # ---------- Обработка команд ----------
-                if command in ('help', 'помощь'):
-                    help_text = (
-                        "🎲 **Команды бота:**\n\n"
-                        "**Бросок кубиков** (можно через / или !):\n"
-                        "/d20 или !d20 — бросить 20-гранный кубик\n"
-                        "/2d6+1d20+5 — несколько кубиков разных типов\n"
-                        "/d100-3 — d100 с модификатором\n\n"
-                        "**Специальные команды:**\n"
-                        "/coin или /монетка — подбросить монетку\n"
-                        "/rand 1 100 — случайное число в диапазоне\n"
-                        "/inj или /ранение — бросок на ранение по таблице Elites Injury Chart\n"
-                        "/spark или /искра [номер] — показать описание прокачки Spark (если номер не указан — случайный бросок)\n"
-                        "/skill [таблица] или /навык [таблица] — бросок 2d6 по таблице прокачки Trench Crusade (по умолчанию melee)\n"
-                        "/table <таблица> — бросок по указанной таблице\n"
-                        "/tables — список доступных таблиц\n"
-                        "/ping — проверка работы\n"
-                        "/reload — перезагрузить таблицы из файлов (только для владельца)\n"
-                        "/help или !help — эта справка\n\n"
-                        "**Комментарии:**\n"
-                        "Добавьте `# текст` в конце команды для пояснения."
-                    )
-                    send_message(user_id, help_text, peer_id)
-
-                elif command in ('coin', 'монетка'):
-                    result = flip_coin()
-                    msg = format_response(mention, f"Бросок монетки: {result}", comment)
-                    send_message(user_id, msg, peer_id)
-
-                elif command in ('rand', 'random'):
-                    result, error = random_number(args)
-                    if error:
-                        msg = format_response(mention, f"Ошибка: {error}")
-                    else:
-                        msg = format_response(mention, f"Результат: {result}", comment)
-                    send_message(user_id, msg, peer_id)
-
-                elif command in ('inj', 'ранение', 'injury'):
-                    result, units, tens, name, desc = roll_injury()
-                    if "Таблица ранений не загружена" in desc or "Ошибка" in name:
-                        msg = format_response(mention, f"Ошибка: {desc}")
-                    else:
-                        result_str = f"Бросок на ранение: {tens}+{units} = **{result}** — *{name}* — {desc}"
-                        msg = format_response(mention, result_str, comment)
-                    send_message(user_id, msg, peer_id)
-
-                elif command in ('spark', 'искра'):
-                    if args:
-                        try:
-                            num = int(args[0])
-                        except ValueError:
-                            msg = format_response(mention, "Ошибка: укажите число. Пример: /spark 42")
-                            send_message(user_id, msg, peer_id)
-                            continue
-                        roll, result = roll_spark(num)
-                    else:
-                        roll, result = roll_spark()  # случайный бросок
-
-                    if result is None:
-                        msg = format_response(mention, f"Ошибка: {roll}")
-                    else:
-                        msg = format_response(mention, f"Бросок d{SPARK_MAX_KEY}: **{roll}** — {result}", comment)
-                    send_message(user_id, msg, peer_id)
-
-                elif command in ('skill', 'навык'):
-                    table_name = args[0].lower() if args else 'melee'
-                    result, error = roll_table(table_name)
-                    if error:
-                        msg = format_response(mention, f"Ошибка: {error}")
-                    else:
-                        msg = format_response(mention, f"Бросок навыка ({table_name}): {result}", comment)
-                    send_message(user_id, msg, peer_id)
-
-                elif command == 'table':
-                    if not args:
-                        available = ", ".join(TABLES.keys()) if TABLES else "нет загруженных таблиц"
-                        msg = format_response(mention, f"Укажите имя таблицы. Доступные: {available}")
-                    else:
-                        table_name = args[0].lower()
-                        result, error = roll_table(table_name)
-                        if error:
-                            msg = format_response(mention, f"Ошибка: {error}")
-                        else:
-                            msg = format_response(mention, f"Бросок по таблице {table_name}: {result}", comment)
-                    send_message(user_id, msg, peer_id)
-
-                elif command == 'tables':
-                    if TABLES:
-                        available = ", ".join(TABLES.keys())
-                        msg = format_response(mention, f"Доступные таблицы: {available}")
-                    else:
-                        msg = format_response(mention, "Таблицы навыков не загружены. Проверьте файл tables.json.")
-                    send_message(user_id, msg, peer_id)
-
-                elif command == 'ping':
-                    send_message(user_id, format_response(mention, "Pong! Бот работает."), peer_id)
-
-                elif command == 'reload':
-                    if OWNER_ID is None:
-                        send_message(user_id, "Команда /reload отключена (не задан OWNER_ID).", peer_id)
-                    elif user_id != OWNER_ID:
-                        send_message(user_id, "У вас нет прав на использование /reload.", peer_id)
-                    else:
-                        success = reload_tables()
-                        if success:
-                            send_message(user_id, "Таблицы успешно перезагружены из файлов.", peer_id)
-                        else:
-                            send_message(user_id, "Не удалось перезагрузить таблицы. Проверьте файлы tables.json, injury.json и spark.json.", peer_id)
-
+            if command in COMMAND_HANDLERS:
+                COMMAND_HANDLERS[command](user_id, peer_id, mention, args, comment)
+            else:
+                # Попытка интерпретировать как бросок кубика
+                result, error = roll_dice(cmd_clean)
+                if error:
+                    send_message(user_id, format_response(mention, f"Ошибка: {error}"), peer_id)
                 else:
-                    result, error = parse_and_roll_multiple(cmd_clean)
-                    if error:
-                        msg = format_response(mention, f"Ошибка: {error}")
-                    else:
-                        msg = format_response(mention, f"Бросок {result}", comment)
-                    send_message(user_id, msg, peer_id)
+                    send_message(user_id, format_response(mention, f"Бросок {result}", comment), peer_id)
 
         except Exception as e:
             logger.error(f"Ошибка в цикле: {e}")

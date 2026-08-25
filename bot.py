@@ -290,6 +290,26 @@ def cmd_help(user_id, peer_id, mention, args, comment):
     )
     send_message(user_id, help_text, peer_id)
 
+def cmd_exp(user_id, peer_id, mention, args, comment):
+    if not args:
+        send_message(user_id, format_response(mention, "Укажите категорию: common, rare или legendary. Пример: /exp common 3", comment), peer_id)
+        return
+    category = args[0].lower()
+    num_dice = 3
+    if len(args) > 1:
+        try:
+            num_dice = int(args[1])
+            if num_dice < 1:
+                raise ValueError
+        except ValueError:
+            send_message(user_id, format_response(mention, "Ошибка: укажите положительное число кубиков (по умолчанию 3).", comment), peer_id)
+            return
+    result, error = roll_exploration(category, num_dice)
+    if error:
+        send_message(user_id, format_response(mention, f"Ошибка: {error}", comment), peer_id)
+    else:
+        send_message(user_id, format_response(mention, result, comment), peer_id)
+
 COMMAND_HANDLERS = {
     "help": cmd_help,
     "помощь": cmd_help,
@@ -306,6 +326,7 @@ COMMAND_HANDLERS = {
     "table": lambda u, p, m, a, c: send_message(u, format_response(m, f"Бросок по таблице {a[0]}: {roll_table(a[0])[0]}" if a and roll_table(a[0])[0] else "Укажите таблицу или проверьте её наличие" if not a else f"Ошибка: {roll_table(a[0])[1]}", c), p),
     "tables": lambda u, p, m, a, c: send_message(u, format_response(m, f"Доступные таблицы: {', '.join(TABLES.keys())}" if TABLES else "Таблицы не загружены", c), p),
     "ping": lambda u, p, m, a, c: send_message(u, format_response(m, "Pong! Бот работает."), p),
+    "exp": cmd_exp,
     "reload": lambda u, p, m, a, c: send_message(u, format_response(m, "Таблицы перезагружены" if reload_tables() else "Ошибка перезагрузки"), p) if OWNER_ID and u == OWNER_ID else send_message(u, format_response(m, "У вас нет прав на /reload"), p) if OWNER_ID else send_message(u, format_response(m, "Команда отключена (OWNER_ID не задан)"), p)
 }
 

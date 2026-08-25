@@ -268,6 +268,13 @@ def roll_injury():
     entry = INJURY_TABLE.get(str(result), ["Unknown", "No description"])
     return result, units, tens, entry[0], entry[1]
 
+def roll_d66():
+    """Бросает D66: две кости, первая – десятки, вторая – единицы."""
+    tens = random.randint(1, 6)
+    units = random.randint(1, 6)
+    result = tens * 10 + units
+    return result, tens, units
+
 def flip_coin():
     return "Орёл!" if random.choice([True, False]) else "Решка!"
 
@@ -282,18 +289,19 @@ def random_number(args):
             return None, "Введите два целых числа. Пример: /rand 1 100"
     return None, "Укажите два числа через пробел. Пример: /rand 1 100"
 
-# ---- Обработчики команд (функции) ----
+# ---- Обработчики команд ----
 def cmd_help(user_id, peer_id, mention, args, comment):
     help_text = (
         "🎲 **Команды бота:**\n\n"
         "**Бросок кубиков** (можно через / или !):\n"
         "/d20 или !d20 — бросить 20-гранный кубик\n"
         "/2d6+1d20+5 — несколько кубиков разных типов\n"
-        "/d100-3 — d100 с модификатором\n\n"
+        "/d100-3 — d100 с модификатором\n"
+        "/d66 — бросок D66 (две шестёрки, первая – десятки, вторая – единицы)\n\n"
         "**Специальные команды:**\n"
         "/coin или /монетка — подбросить монетку\n"
         "/rand 1 100 — случайное число в диапазоне\n"
-        "/inj или /ранение — бросок на ранение по таблице Elites Injury Chart\n"
+        "/inj или /ранение — бросок на ранение по таблице Elites Injury Chart (D66)\n"
         "/spark [номер] — показать описание прокачки Spark (если номер не указан — случайный бросок)\n"
         "/skill [таблица] — бросок 2d6 по таблице прокачки Trench Crusade (по умолчанию melee)\n"
         "/table <таблица> — бросок по указанной таблице\n"
@@ -320,6 +328,10 @@ def cmd_rand(user_id, peer_id, mention, args, comment):
 def cmd_inj(user_id, peer_id, mention, args, comment):
     result, units, tens, name, desc = roll_injury()
     send_message(user_id, format_response(mention, f"Бросок на ранение: {tens}+{units} = **{result}** — *{name}* — {desc}", comment), peer_id)
+
+def cmd_d66(user_id, peer_id, mention, args, comment):
+    result, tens, units = roll_d66()
+    send_message(user_id, format_response(mention, f"Бросок D66: **{result}** (десятки: {tens}, единицы: {units})", comment), peer_id)
 
 def cmd_spark(user_id, peer_id, mention, args, comment):
     if args:
@@ -387,7 +399,6 @@ def cmd_exp(user_id, peer_id, mention, args, comment):
         send_message(user_id, format_response(mention, f"Неверная категория. Доступные: common, rare, legendary.", comment), peer_id)
         return
 
-    # Если второй аргумент отсутствует, используем по умолчанию 3d6
     if len(args) == 1:
         result, error = roll_exploration(category, num_dice=3)
         if error:
@@ -398,7 +409,6 @@ def cmd_exp(user_id, peer_id, mention, args, comment):
 
     expr = args[1].lower().replace(' ', '')
 
-    # Проверяем, является ли expr целым числом (прямой запрос)
     if expr.isdigit():
         try:
             direct_val = int(expr)
@@ -413,19 +423,16 @@ def cmd_exp(user_id, peer_id, mention, args, comment):
             send_message(user_id, format_response(mention, "Ошибка: укажите положительное целое число.", comment), peer_id)
         return
 
-    # Проверяем на наличие d
     if 'd' not in expr:
         send_message(user_id, format_response(mention, "Ошибка: укажите выражение с d (например, 3d6) или простое число.", comment), peer_id)
         return
 
-    # Парсим как бросок с модификатором
     num_dice = 3
     modifier = 0
-    # Ищем модификатор
     mod_match = re.search(r'([+-]\d+)$', expr)
     if mod_match:
         modifier = int(mod_match.group(1))
-        expr = expr[:mod_match.start()]  # удаляем модификатор
+        expr = expr[:mod_match.start()]
     if 'd' in expr:
         parts = expr.split('d')
         if parts[0] == '':
@@ -459,6 +466,7 @@ COMMAND_HANDLERS = {
     "inj": cmd_inj,
     "ранение": cmd_inj,
     "injury": cmd_inj,
+    "d66": cmd_d66,
     "spark": cmd_spark,
     "skill": cmd_skill,
     "навык": cmd_skill,
@@ -499,7 +507,6 @@ for event in longpoll.listen():
             if command in COMMAND_HANDLERS:
                 COMMAND_HANDLERS[command](user_id, peer_id, mention, args, comment)
             else:
-                # Попытка интерпретировать как бросок кубика
                 result, error = roll_dice(cmd_clean)
                 if error:
                     send_message(user_id, format_response(mention, f"Ошибка: {error}"), peer_id)

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # ---- Переменные окружения ----
 VK_TOKEN = os.environ.get("VK_TOKEN")
 GROUP_ID = os.environ.get("GROUP_ID")
-OWNER_ID = os.environ.get("OWNER_ID")   # числовой ID владельца для /reload
+OWNER_ID = os.environ.get("OWNER_ID")
 
 if not VK_TOKEN:
     raise Exception("Переменная окружения VK_TOKEN не задана!")
@@ -119,7 +119,6 @@ INJURY_FILE = "injury.json"
 SPARK_FILE = "spark.json"
 
 def load_json_file(filename, default=None):
-    """Загружает JSON из файла, если он есть и валиден, иначе возвращает default (пустой словарь)."""
     if os.path.exists(filename):
         try:
             with open(filename, 'r', encoding='utf-8') as f:
@@ -133,32 +132,23 @@ def load_json_file(filename, default=None):
         logger.warning(f"Файл {filename} не найден.")
         return default if default is not None else {}
 
-# Глобальные таблицы
 TABLES = load_json_file(TABLES_FILE)
 INJURY_TABLE = load_json_file(INJURY_FILE)
 SPARK_TABLE = load_json_file(SPARK_FILE)
+SPARK_MAX_KEY = max(map(int, SPARK_TABLE.keys())) if SPARK_TABLE else 0
 
 def reload_tables():
-    """Перезагружает все таблицы из файлов."""
-    global TABLES, INJURY_TABLE, SPARK_TABLE
+    global TABLES, INJURY_TABLE, SPARK_TABLE, SPARK_MAX_KEY
     new_tables = load_json_file(TABLES_FILE)
     new_injury = load_json_file(INJURY_FILE)
     new_spark = load_json_file(SPARK_FILE)
     if new_tables:
         TABLES = new_tables
-        logger.info("Таблицы навыков обновлены")
-    else:
-        logger.warning("Не удалось загрузить tables.json – таблицы навыков не обновлены")
     if new_injury:
         INJURY_TABLE = new_injury
-        logger.info("Таблица ранений обновлена")
-    else:
-        logger.warning("Не удалось загрузить injury.json – таблица ранений не обновлена")
     if new_spark:
         SPARK_TABLE = new_spark
-        logger.info("Таблица Spark обновлена")
-    else:
-        logger.warning("Не удалось загрузить spark.json – таблица Spark не обновлена")
+        SPARK_MAX_KEY = max(map(int, SPARK_TABLE.keys())) if SPARK_TABLE else 0
     return bool(new_tables) or bool(new_injury) or bool(new_spark)
 
 # ---- Утилита для извлечения комментария ----
@@ -203,17 +193,17 @@ def roll_injury():
     name, desc = get_injury_description(result)
     return result, units, tens, name, desc
 
-def roll_spark():
-    """Бросает d145 и возвращает результат из таблицы spark."""
+def roll_spark(number=None):
     if not SPARK_TABLE:
         return None, "Таблица Spark не загружена. Проверьте наличие файла spark.json."
-    roll = random.randint(1, 145)
-    key = str(roll)
-    if key in SPARK_TABLE:
-        description = SPARK_TABLE[key]
-        return roll, description
-    else:
-        return None, f"Ошибка: для числа {roll} нет записи в таблице Spark."
+    if number is not None:
+        key = str(number)
+        if key in SPARK_TABLE:
+            return number, SPARK_TABLE[key]
+        else:
+            return None, f"Запись с номером {number} не найдена."
+    roll = random.randint(1, SPARK_MAX_KEY)
+    return roll, SPARK_TABLE[str(roll)]
 
 # ---- Основные функции команд ----
 def flip_coin():
@@ -342,7 +332,7 @@ for event in longpoll.listen():
                         "/coin или /монетка — подбросить монетку\n"
                         "/rand 1 100 — случайное число в диапазоне\n"
                         "/inj или /ранение — бросок на ранение по таблице Elites Injury Chart\n"
-                        "/spark или /искра — бросить d145 и получить прокачку из таблицы Spark\n"
+                        "/spark или /искра [номер] — показать описание прокачки Spark (если номер не указан — случайный бросок)\n"
                         "/skill [таблица] или /навык [таблица] — бросок 2d6 по таблице прокачки Trench Crusade (по умолчанию melee)\n"
                         "/table <таблица> — бросок по указанной таблице\n"
                         "/tables — список доступных таблиц\n"
@@ -377,11 +367,21 @@ for event in longpoll.listen():
                     send_message(user_id, msg, peer_id)
 
                 elif command in ('spark', 'искра'):
-                    roll, result = roll_spark()
+                    if args:
+                        try:
+                            num = int(args[0])
+                        except ValueError:
+                            msg = format_response(mention, "Ошибка: укажите число. Пример: /spark 42")
+                            send_message(user_id, msg, peer_id)
+                            continue
+                        roll, result = roll_spark(num)
+                    else:
+                        roll, result = roll_spark()  # случайный бросок
+
                     if result is None:
                         msg = format_response(mention, f"Ошибка: {roll}")
                     else:
-                        msg = format_response(mention, f"Бросок d145: **{roll}** — {result}", comment)
+                        msg = format_response(mention, f"Бросок d{SPARK_MAX_KEY}: **{roll}** — {result}", comment)
                     send_message(user_id, msg, peer_id)
 
                 elif command in ('skill', 'навык'):

@@ -113,49 +113,37 @@ def format_response(mention, result, comment=None):
         return f"{mention}{result} (комментарий: {comment})"
     return f"{mention}{result}"
 
-# ---- Загрузка таблиц из файлов в корне (обязательные файлы) ----
+# ---- Загрузка таблиц из файлов в корне ----
 TABLES_FILE = "tables.json"
 INJURY_FILE = "injury.json"
+SPARK_FILE = "spark.json"
 
-def load_tables_from_file():
-    """Загружает таблицы навыков из tables.json. Если файл отсутствует или повреждён, возвращает пустой словарь."""
-    if os.path.exists(TABLES_FILE):
+def load_json_file(filename, default=None):
+    """Загружает JSON из файла, если он есть и валиден, иначе возвращает default (пустой словарь)."""
+    if os.path.exists(filename):
         try:
-            with open(TABLES_FILE, 'r', encoding='utf-8') as f:
+            with open(filename, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                logger.info(f"Загружен файл {TABLES_FILE}")
+                logger.info(f"Загружен файл {filename}")
                 return data
         except (json.JSONDecodeError, IOError) as e:
-            logger.error(f"Ошибка чтения {TABLES_FILE}: {e}. Таблицы навыков не загружены.")
-            return {}
+            logger.error(f"Ошибка чтения {filename}: {e}. Данные не загружены.")
+            return default if default is not None else {}
     else:
-        logger.error(f"Файл {TABLES_FILE} не найден. Таблицы навыков недоступны.")
-        return {}
+        logger.warning(f"Файл {filename} не найден.")
+        return default if default is not None else {}
 
-def load_injury_from_file():
-    """Загружает таблицу ранений из injury.json. Если файл отсутствует или повреждён, возвращает пустой словарь."""
-    if os.path.exists(INJURY_FILE):
-        try:
-            with open(INJURY_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                logger.info(f"Загружен файл {INJURY_FILE}")
-                return data
-        except (json.JSONDecodeError, IOError) as e:
-            logger.error(f"Ошибка чтения {INJURY_FILE}: {e}. Таблица ранений не загружена.")
-            return {}
-    else:
-        logger.error(f"Файл {INJURY_FILE} не найден. Таблица ранений недоступна.")
-        return {}
-
-# Глобальные переменные для таблиц (загружаются при старте)
-TABLES = load_tables_from_file()
-INJURY_TABLE = load_injury_from_file()
+# Глобальные таблицы
+TABLES = load_json_file(TABLES_FILE)
+INJURY_TABLE = load_json_file(INJURY_FILE)
+SPARK_TABLE = load_json_file(SPARK_FILE)
 
 def reload_tables():
-    """Перезагружает таблицы из файлов (используется в /reload)."""
-    global TABLES, INJURY_TABLE
-    new_tables = load_tables_from_file()
-    new_injury = load_injury_from_file()
+    """Перезагружает все таблицы из файлов."""
+    global TABLES, INJURY_TABLE, SPARK_TABLE
+    new_tables = load_json_file(TABLES_FILE)
+    new_injury = load_json_file(INJURY_FILE)
+    new_spark = load_json_file(SPARK_FILE)
     if new_tables:
         TABLES = new_tables
         logger.info("Таблицы навыков обновлены")
@@ -166,7 +154,12 @@ def reload_tables():
         logger.info("Таблица ранений обновлена")
     else:
         logger.warning("Не удалось загрузить injury.json – таблица ранений не обновлена")
-    return bool(new_tables) or bool(new_injury)
+    if new_spark:
+        SPARK_TABLE = new_spark
+        logger.info("Таблица Spark обновлена")
+    else:
+        logger.warning("Не удалось загрузить spark.json – таблица Spark не обновлена")
+    return bool(new_tables) or bool(new_injury) or bool(new_spark)
 
 # ---- Утилита для извлечения комментария ----
 def extract_comment(cmd):
@@ -209,6 +202,18 @@ def roll_injury():
     result = tens * 10 + units
     name, desc = get_injury_description(result)
     return result, units, tens, name, desc
+
+def roll_spark():
+    """Бросает d145 и возвращает результат из таблицы spark."""
+    if not SPARK_TABLE:
+        return None, "Таблица Spark не загружена. Проверьте наличие файла spark.json."
+    roll = random.randint(1, 145)
+    key = str(roll)
+    if key in SPARK_TABLE:
+        description = SPARK_TABLE[key]
+        return roll, description
+    else:
+        return None, f"Ошибка: для числа {roll} нет записи в таблице Spark."
 
 # ---- Основные функции команд ----
 def flip_coin():
@@ -337,6 +342,7 @@ for event in longpoll.listen():
                         "/coin или /монетка — подбросить монетку\n"
                         "/rand 1 100 — случайное число в диапазоне\n"
                         "/inj или /ранение — бросок на ранение по таблице Elites Injury Chart\n"
+                        "/spark или /искра — бросить d145 и получить прокачку из таблицы Spark\n"
                         "/skill [таблица] или /навык [таблица] — бросок 2d6 по таблице прокачки Trench Crusade (по умолчанию melee)\n"
                         "/table <таблица> — бросок по указанной таблице\n"
                         "/tables — список доступных таблиц\n"
@@ -368,6 +374,14 @@ for event in longpoll.listen():
                     else:
                         result_str = f"Бросок на ранение: {tens}+{units} = **{result}** — *{name}* — {desc}"
                         msg = format_response(mention, result_str, comment)
+                    send_message(user_id, msg, peer_id)
+
+                elif command in ('spark', 'искра'):
+                    roll, result = roll_spark()
+                    if result is None:
+                        msg = format_response(mention, f"Ошибка: {roll}")
+                    else:
+                        msg = format_response(mention, f"Бросок d145: **{roll}** — {result}", comment)
                     send_message(user_id, msg, peer_id)
 
                 elif command in ('skill', 'навык'):
@@ -413,7 +427,7 @@ for event in longpoll.listen():
                         if success:
                             send_message(user_id, "Таблицы успешно перезагружены из файлов.", peer_id)
                         else:
-                            send_message(user_id, "Не удалось перезагрузить таблицы. Проверьте файлы tables.json и injury.json.", peer_id)
+                            send_message(user_id, "Не удалось перезагрузить таблицы. Проверьте файлы tables.json, injury.json и spark.json.", peer_id)
 
                 else:
                     result, error = parse_and_roll_multiple(cmd_clean)

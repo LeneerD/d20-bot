@@ -60,6 +60,10 @@ vk = vk_session.get_api()
 donor_cache = {}
 
 def is_donor(user_id):
+    # Владелец (OWNER_ID) всегда считается донатером для тестирования
+    if OWNER_ID is not None and user_id == OWNER_ID:
+        return True
+
     user_id_str = str(user_id)
     if user_id_str in donor_cache:
         return donor_cache[user_id_str]

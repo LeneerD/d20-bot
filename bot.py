@@ -4,6 +4,8 @@ import random
 import re
 import time
 import logging
+import sqlite3
+from datetime import datetime
 import vk_api
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 from requests.exceptions import ReadTimeout, ConnectionError
@@ -184,6 +186,296 @@ def reload_tables():
             "legendary": exploration.get("legendary", {})
         }
     return any((tables, injury, spark, exploration))
+
+# ---- База данных (SQLite) ----
+DB_PATH = os.path.join(os.path.dirname(__file__), 'bot_data.db')
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS aliases (
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            command TEXT NOT NULL,
+            PRIMARY KEY (user_id, name)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS characters (
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            PRIMARY KEY (user_id, name)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS character_stats (
+            user_id INTEGER NOT NULL,
+            char_name TEXT NOT NULL,
+            param TEXT NOT NULL,
+            value TEXT NOT NULL,
+            PRIMARY KEY (user_id, char_name, param)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS active_character (
+            user_id INTEGER PRIMARY KEY,
+            char_name TEXT NOT NULL
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS monsters (
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            PRIMARY KEY (user_id, name)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS monster_stats (
+            user_id INTEGER NOT NULL,
+            monster_name TEXT NOT NULL,
+            param TEXT NOT NULL,
+            value TEXT NOT NULL,
+            PRIMARY KEY (user_id, monster_name, param)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS active_monster (
+            user_id INTEGER PRIMARY KEY,
+            monster_name TEXT NOT NULL
+        )
+    ''')
+    conn.commit()
+    return conn
+
+# ---- Функции для работы с алиасами ----
+def save_alias(user_id, name, command):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO aliases (user_id, name, command) VALUES (?, ?, ?)",
+        (user_id, name, command)
+    )
+    conn.commit()
+    conn.close()
+
+def get_alias(user_id, name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT command FROM aliases WHERE user_id = ? AND name = ?",
+        (user_id, name)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+def get_user_aliases(user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name, command FROM aliases WHERE user_id = ?",
+        (user_id,)
+    )
+    result = cursor.fetchall()
+    conn.close()
+    return result
+
+def delete_alias(user_id, name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM aliases WHERE user_id = ? AND name = ?",
+        (user_id, name)
+    )
+    conn.commit()
+    conn.close()
+
+# ---- Функции для работы с персонажами ----
+def create_character(user_id, name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR IGNORE INTO characters (user_id, name) VALUES (?, ?)",
+        (user_id, name)
+    )
+    conn.commit()
+    conn.close()
+
+def delete_character(user_id, name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM characters WHERE user_id = ? AND name = ?",
+        (user_id, name)
+    )
+    cursor.execute(
+        "DELETE FROM character_stats WHERE user_id = ? AND char_name = ?",
+        (user_id, name)
+    )
+    cursor.execute(
+        "DELETE FROM active_character WHERE user_id = ? AND char_name = ?",
+        (user_id, name)
+    )
+    conn.commit()
+    conn.close()
+
+def get_user_characters(user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name FROM characters WHERE user_id = ?",
+        (user_id,)
+    )
+    result = cursor.fetchall()
+    conn.close()
+    return [row[0] for row in result]
+
+def set_character_stat(user_id, char_name, param, value):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO character_stats (user_id, char_name, param, value) VALUES (?, ?, ?, ?)",
+        (user_id, char_name, param, value)
+    )
+    conn.commit()
+    conn.close()
+
+def get_character_stat(user_id, char_name, param):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT value FROM character_stats WHERE user_id = ? AND char_name = ? AND param = ?",
+        (user_id, char_name, param)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+def get_all_character_stats(user_id, char_name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT param, value FROM character_stats WHERE user_id = ? AND char_name = ?",
+        (user_id, char_name)
+    )
+    result = cursor.fetchall()
+    conn.close()
+    return dict(result) if result else {}
+
+def set_active_character(user_id, char_name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO active_character (user_id, char_name) VALUES (?, ?)",
+        (user_id, char_name)
+    )
+    conn.commit()
+    conn.close()
+
+def get_active_character(user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT char_name FROM active_character WHERE user_id = ?",
+        (user_id,)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+# ---- Функции для работы с монстрами (аналогичны персонажам) ----
+def create_monster(user_id, name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR IGNORE INTO monsters (user_id, name) VALUES (?, ?)",
+        (user_id, name)
+    )
+    conn.commit()
+    conn.close()
+
+def delete_monster(user_id, name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM monsters WHERE user_id = ? AND name = ?",
+        (user_id, name)
+    )
+    cursor.execute(
+        "DELETE FROM monster_stats WHERE user_id = ? AND monster_name = ?",
+        (user_id, name)
+    )
+    cursor.execute(
+        "DELETE FROM active_monster WHERE user_id = ? AND monster_name = ?",
+        (user_id, name)
+    )
+    conn.commit()
+    conn.close()
+
+def get_user_monsters(user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name FROM monsters WHERE user_id = ?",
+        (user_id,)
+    )
+    result = cursor.fetchall()
+    conn.close()
+    return [row[0] for row in result]
+
+def set_monster_stat(user_id, monster_name, param, value):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO monster_stats (user_id, monster_name, param, value) VALUES (?, ?, ?, ?)",
+        (user_id, monster_name, param, value)
+    )
+    conn.commit()
+    conn.close()
+
+def get_monster_stat(user_id, monster_name, param):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT value FROM monster_stats WHERE user_id = ? AND monster_name = ? AND param = ?",
+        (user_id, monster_name, param)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+def get_all_monster_stats(user_id, monster_name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT param, value FROM monster_stats WHERE user_id = ? AND monster_name = ?",
+        (user_id, monster_name)
+    )
+    result = cursor.fetchall()
+    conn.close()
+    return dict(result) if result else {}
+
+def set_active_monster(user_id, monster_name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO active_monster (user_id, monster_name) VALUES (?, ?)",
+        (user_id, monster_name)
+    )
+    conn.commit()
+    conn.close()
+
+def get_active_monster(user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT monster_name FROM active_monster WHERE user_id = ?",
+        (user_id,)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
 
 # ---- Универсальный парсер бросков ----
 def explode_dice(initial_value, dice_type, explode_type):
@@ -466,10 +758,21 @@ def handle_help(mention, args, comment):
         "/ping — проверка работы\n"
         "/reload — перезагрузить таблицы (только для владельца)\n"
         "/help — эта справка\n\n"
-        "*Эксклюзивные команды для донатеров VK Donut:*\n"
-        "/donate_roll или /донат_бросок — эксклюзивный бросок 4d6\n"
-        "/donate_stats или /донат_статы — генерация 7 характеристик (вместо 6)\n"
-        "/donate_spark или /донат_искра — бросок по таблице Spark с бонусом +5 (или просмотр конкретной прокачки по номеру)\n\n"
+        "*Премиум-функции (только для донатеров VK Donut):*\n"
+        "/ал {имя} {команда} — сохранить алиас (например, /ал 2атаки 2к6+3)\n"
+        "/ал — посмотреть список алиасов\n"
+        "/ал уд {имя} — удалить алиас\n"
+        "/char {имя} — создать персонажа или переключиться на него\n"
+        "/char — посмотреть список персонажей\n"
+        "/char del {имя} — удалить персонажа\n"
+        "/char set {параметр}={значение} — задать параметр персонажу\n"
+        "/char stats — посмотреть параметры активного персонажа\n"
+        "/char hp {±N} — изменить хиты активного персонажа\n"
+        "/char +lvl — повысить уровень активного персонажа\n"
+        "/mon {имя} — создать монстра\n"
+        "/mon — посмотреть список монстров\n"
+        "/mon set {параметр}={значение} — задать параметр монстру\n"
+        "/mon stats — посмотреть параметры активного монстра\n"
         "*Комментарии:*\nДобавьте `# текст` в конце команды для пояснения."
     )
     return help_text, None, None
@@ -657,6 +960,162 @@ def handle_donate_spark(mention, args, comment, user_id):
         desc = SPARK_TABLE.get(str(modified), "Описание отсутствует")
         return f"Эксклюзивный бросок d{SPARK_MAX_KEY} с бонусом +5: {modified} (исходный бросок: {roll}) — {desc}", None, None
 
+# ---- Премиум-функции для донатеров (алиасы, персонажи, монстры) ----
+def handle_alias(mention, args, comment, user_id):
+    if not is_donor(user_id):
+        return "Эта функция доступна только донатерам! Оформите подписку VK Donut.", None, None
+
+    if not args:
+        aliases = get_user_aliases(user_id)
+        if not aliases:
+            return "У вас нет сохранённых алиасов.", None, None
+        lines = ["*Ваши алиасы:*"]
+        for name, cmd in aliases:
+            lines.append(f"/{name} → {cmd}")
+        return "\n".join(lines), None, None
+
+    if args[0] in ("del", "delete", "уд", "удалить"):
+        if len(args) < 2:
+            return "Укажите имя алиаса для удаления. Пример: /ал уд 2атаки", None, None
+        delete_alias(user_id, args[1])
+        return f"Алиас '{args[1]}' удалён.", None, None
+
+    if len(args) < 2:
+        return "Укажите имя и команду. Пример: /ал 2атаки к+5 1к8+3", None, None
+    
+    name = args[0]
+    command = " ".join(args[1:])
+    save_alias(user_id, name, command)
+    return f"Алиас '/{name}' сохранён.", None, None
+
+def handle_character(mention, args, comment, user_id):
+    if not is_donor(user_id):
+        return "Эта функция доступна только донатерам! Оформите подписку VK Donut.", None, None
+
+    if not args:
+        chars = get_user_characters(user_id)
+        active = get_active_character(user_id)
+        if not chars:
+            return "У вас нет персонажей. Создайте: /char Имя", None, None
+        lines = ["*Ваши персонажи:*"]
+        for name in chars:
+            marker = "✅ " if name == active else ""
+            lines.append(f"{marker}{name}")
+        return "\n".join(lines), None, None
+
+    # Создание/переключение
+    if len(args) == 1:
+        name = args[0]
+        create_character(user_id, name)
+        set_active_character(user_id, name)
+        return f"Персонаж '{name}' создан и выбран как активный.", None, None
+
+    if args[0] == "del":
+        if len(args) < 2:
+            return "Укажите имя персонажа для удаления.", None, None
+        delete_character(user_id, args[1])
+        return f"Персонаж '{args[1]}' удалён.", None, None
+
+    # Работа с активным персонажем
+    active = get_active_character(user_id)
+    if not active:
+        return "Сначала выберите активного персонажа: /char Имя", None, None
+
+    if args[0] == "set":
+        if len(args) < 2:
+            return "Укажите параметр и значение. Пример: /char set hp=20", None, None
+        try:
+            param, value = args[1].split("=", 1)
+        except ValueError:
+            return "Неверный формат. Используйте: /char set param=value", None, None
+        set_character_stat(user_id, active, param, value)
+        return f"Параметр '{param}' для персонажа '{active}' установлен: {value}", None, None
+
+    if args[0] == "stats" or args[0] == "параметры":
+        stats = get_all_character_stats(user_id, active)
+        if not stats:
+            return f"У персонажа '{active}' нет сохранённых параметров.", None, None
+        lines = [f"*Параметры персонажа {active}:*"]
+        for param, value in stats.items():
+            lines.append(f"{param}: {value}")
+        return "\n".join(lines), None, None
+
+    if args[0] == "hp":
+        if len(args) < 2:
+            return "Укажите изменение. Пример: /char hp -5 или /char hp +10", None, None
+        try:
+            change = int(args[1])
+        except ValueError:
+            return "Укажите число. Пример: /char hp -5", None, None
+        current_hp = get_character_stat(user_id, active, "hp")
+        if current_hp is None:
+            current_hp = "0"
+        new_hp = int(current_hp) + change
+        set_character_stat(user_id, active, "hp", str(new_hp))
+        return f"Хиты персонажа '{active}': {current_hp} → {new_hp} ({change:+d})", None, None
+
+    if args[0] == "+lvl":
+        current_lvl = get_character_stat(user_id, active, "lvl")
+        if current_lvl is None:
+            current_lvl = "0"
+        new_lvl = int(current_lvl) + 1
+        set_character_stat(user_id, active, "lvl", str(new_lvl))
+        return f"Уровень персонажа '{active}': {current_lvl} → {new_lvl}", None, None
+
+    return "Неизвестная команда. Доступно: /char Имя, /char del Имя, /char set param=value, /char stats, /char hp ±N, /char +lvl", None, None
+
+def handle_monster(mention, args, comment, user_id):
+    if not is_donor(user_id):
+        return "Эта функция доступна только донатерам! Оформите подписку VK Donut.", None, None
+
+    if not args:
+        monsters = get_user_monsters(user_id)
+        active = get_active_monster(user_id)
+        if not monsters:
+            return "У вас нет монстров. Создайте: /мон Имя", None, None
+        lines = ["*Ваши монстры:*"]
+        for name in monsters:
+            marker = "✅ " if name == active else ""
+            lines.append(f"{marker}{name}")
+        return "\n".join(lines), None, None
+
+    if len(args) == 1:
+        name = args[0]
+        create_monster(user_id, name)
+        set_active_monster(user_id, name)
+        return f"Монстр '{name}' создан и выбран как активный.", None, None
+
+    if args[0] == "del":
+        if len(args) < 2:
+            return "Укажите имя монстра для удаления.", None, None
+        delete_monster(user_id, args[1])
+        return f"Монстр '{args[1]}' удалён.", None, None
+
+    active = get_active_monster(user_id)
+    if not active:
+        return "Сначала выберите активного монстра: /мон Имя", None, None
+
+    if args[0] == "set":
+        if len(args) < 2:
+            return "Укажите параметр и значение. Пример: /мон set hp=20", None, None
+        try:
+            param, value = args[1].split("=", 1)
+        except ValueError:
+            return "Неверный формат. Используйте: /мон set param=value", None, None
+        set_monster_stat(user_id, active, param, value)
+        return f"Параметр '{param}' для монстра '{active}' установлен: {value}", None, None
+
+    if args[0] == "stats" or args[0] == "параметры":
+        stats = get_all_monster_stats(user_id, active)
+        if not stats:
+            return f"У монстра '{active}' нет сохранённых параметров.", None, None
+        lines = [f"*Параметры монстра {active}:*"]
+        for param, value in stats.items():
+            lines.append(f"{param}: {value}")
+        return "\n".join(lines), None, None
+
+    return "Неизвестная команда. Доступно: /мон Имя, /мон del Имя, /мон set param=value, /мон stats", None, None
+
 # ---- Словарь команд ----
 COMMAND_HANDLERS = {
     "help": handle_help,
@@ -697,6 +1156,15 @@ COMMAND_HANDLERS = {
     "донат_статы": handle_donate_stats,
     "donate_spark": handle_donate_spark,
     "донат_искра": handle_donate_spark,
+    # Премиум-команды
+    "al": handle_alias,
+    "ал": handle_alias,
+    "char": handle_character,
+    "перс": handle_character,
+    "character": handle_character,
+    "mon": handle_monster,
+    "мон": handle_monster,
+    "monster": handle_monster,
 }
 
 # ---- Главный цикл с обработкой ошибок ----
@@ -705,7 +1173,6 @@ while True:
     try:
         for event in longpoll.listen():
             try:
-                # Проверяем, что это событие нового сообщения
                 if event.type != VkBotEventType.MESSAGE_NEW:
                     continue
                 if not event.object or not event.object.message:
@@ -736,15 +1203,30 @@ while True:
                 args = parts[1:] if len(parts) > 1 else []
                 mention = mention_user(user_id, peer_id)
 
+                # Проверяем, не является ли команда алиасом (только если не зарегистрирована в COMMAND_HANDLERS)
+                if command not in COMMAND_HANDLERS:
+                    alias_cmd = get_alias(user_id, command)
+                    if alias_cmd:
+                        # Выполняем команду из алиаса как обычный бросок
+                        result, error, details = parse_expression(alias_cmd)
+                        if error:
+                            send_message(user_id, format_response(mention, f"Ошибка в алиасе: {error}", None, comment), peer_id)
+                        else:
+                            main = f"алиас '{command}' → {alias_cmd}: {result}"
+                            send_message(user_id, format_response(mention, main, details, comment), peer_id)
+                        continue
+
                 if command in COMMAND_HANDLERS:
                     handler = COMMAND_HANDLERS[command]
                     # Команды, требующие user_id
-                    if command in ("reload", "donate_roll", "донат_бросок", "donate_stats", "донат_статы", "donate_spark", "донат_искра"):
+                    if command in ("reload", "donate_roll", "донат_бросок", "donate_stats", "донат_статы", "donate_spark", "донат_искра",
+                                   "al", "ал", "char", "перс", "character", "mon", "мон", "monster"):
                         main, details, _ = handler(mention, args, comment, user_id)
                     else:
                         main, details, _ = handler(mention, args, comment)
                     send_message(user_id, format_response(mention, main, details, comment), peer_id)
                 else:
+                    # Обычный бросок
                     result, error, details = parse_expression(cmd_clean)
                     if error:
                         send_message(user_id, format_response(mention, f"Ошибка: {error}", None, comment), peer_id)

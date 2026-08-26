@@ -62,7 +62,6 @@ def is_donor(user_id):
     if user_id_str in donor_cache:
         return donor_cache[user_id_str]
     try:
-        # Токен должен иметь доступ к методу donut.isDon
         response = vk.method('donut.isDon', {'user_id': user_id})
         donor_cache[user_id_str] = response
         return response
@@ -215,10 +214,8 @@ def parse_single_component(comp):
     if not comp:
         return None, "Пустой компонент", None
 
-    # Заменяем русские 'к' и 'д' на 'd'
     comp = comp.replace('к', 'd').replace('К', 'd').replace('д', 'd').replace('Д', 'd')
 
-    # Проверка на adv/dis
     adv_dis_map = {
         'adv': 1, 'advantage': 1, 'пр': 1, 'преимущество': 1,
         'dis': -1, 'disadvantage': -1, 'пом': -1, 'помеха': -1
@@ -233,14 +230,12 @@ def parse_single_component(comp):
                 result += int(mod)
             return result, None, None
 
-    # Обычный бросок кубиков или число
     if 'd' not in comp:
         try:
             return int(comp), None, None
         except ValueError:
             return None, f"Неверный компонент: {comp}", None
 
-    # Взрывные
     explode_type = None
     explode_count = 0
     explode_match = re.search(r'(!{1,2})(\d*)', comp)
@@ -250,20 +245,17 @@ def parse_single_component(comp):
         explode_count = int(explode_count_str) if explode_count_str else 1
         comp = comp[:explode_match.start()] + comp[explode_match.end():]
 
-    # Резист (r или с)
     resist = False
     if comp.endswith('r') or comp.endswith('с'):
         resist = True
         comp = comp[:-1]
 
-    # Умножение
     multiplier = 1
     mult_match = re.search(r'[x*](\d+)', comp)
     if mult_match:
         multiplier = int(mult_match.group(1))
         comp = comp[:mult_match.start()] + comp[mult_match.end():]
 
-    # Модификаторы +-
     mods = re.findall(r'([+-]\d+)', comp)
     for mod in mods:
         comp = comp.replace(mod, '')
@@ -311,7 +303,6 @@ def parse_single_component(comp):
     if resist:
         total //= 2
 
-    # Формируем детали для вывода
     details_parts = []
     if len(rolls) > 1:
         details_parts.append(", ".join(map(str, rolls)))
@@ -444,7 +435,7 @@ def generate_stats():
         stats.append(sum(rolls[1:]))
     return stats
 
-# ---- Обработчики команд (возвращают (main, details, comment) для format_response) ----
+# ---- Обработчики команд ----
 def handle_help(mention, args, comment):
     help_text = (
         "🎲 *Команды бота:*\n\n"
@@ -483,7 +474,6 @@ def handle_help(mention, args, comment):
     )
     return help_text, None, None
 
-# ---- Универсальный обработчик для простых команд ----
 def handle_coin(mention, args, comment):
     return f"Бросок монетки: {flip_coin()}", None, None
 
@@ -495,9 +485,7 @@ def handle_rand(mention, args, comment):
 
 def handle_inj(mention, args, comment):
     result, name, desc = roll_injury()
-    main = f"Бросок на ранение: {result} — {name}"
-    details = desc
-    return main, details, None
+    return f"Бросок на ранение: {result} — {name}", desc, None
 
 def handle_d66(mention, args, comment):
     result, details = roll_d66()
@@ -635,16 +623,13 @@ def handle_exp(mention, args, comment):
 def handle_donate_roll(mention, args, comment, user_id):
     if not is_donor(user_id):
         return "Этот функционал доступен только донатерам! Оформите подписку VK Donut.", None, None
-    
     rolls = [random.randint(1, 6) for _ in range(4)]
     total = sum(rolls)
-    details = ", ".join(map(str, rolls))
-    return f"Эксклюзивный бросок 4d6: {total}", details, None
+    return f"Эксклюзивный бросок 4d6: {total}", ", ".join(map(str, rolls)), None
 
 def handle_donate_stats(mention, args, comment, user_id):
     if not is_donor(user_id):
         return "Этот функционал доступен только донатерам! Оформите подписку VK Donut.", None, None
-    
     stats = []
     for _ in range(7):
         rolls = [random.randint(1, 6) for _ in range(4)]
@@ -655,10 +640,8 @@ def handle_donate_stats(mention, args, comment, user_id):
 def handle_donate_spark(mention, args, comment, user_id):
     if not is_donor(user_id):
         return "Этот функционал доступен только донатерам! Оформите подписку VK Donut.", None, None
-    
     if not SPARK_TABLE:
         return "Таблица Spark не загружена.", None, None
-    
     if args:
         try:
             num = int(args[0])
@@ -708,7 +691,6 @@ COMMAND_HANDLERS = {
     "disadvantage": handle_dis,
     "пом": handle_dis,
     "помеха": handle_dis,
-    # Эксклюзивные команды для донатеров
     "donate_roll": handle_donate_roll,
     "донат_бросок": handle_donate_roll,
     "donate_stats": handle_donate_stats,
@@ -723,11 +705,20 @@ while True:
     try:
         for event in longpoll.listen():
             try:
-                peer_id = event.object.message['peer_id']
-                user_id = event.object.message['from_id']
-                text = event.object.message['text'].strip()
+                # Проверяем, что это событие нового сообщения
+                if event.type != VkBotEventType.MESSAGE_NEW:
+                    continue
+                if not event.object or not event.object.message:
+                    continue
 
-                if not text or not text.startswith('/'):
+                peer_id = event.object.message.get('peer_id')
+                user_id = event.object.message.get('from_id')
+                text = event.object.message.get('text')
+                if not text:
+                    continue
+
+                text = text.strip()
+                if not text.startswith('/'):
                     continue
 
                 cmd_raw = text[1:].strip()
@@ -747,7 +738,7 @@ while True:
 
                 if command in COMMAND_HANDLERS:
                     handler = COMMAND_HANDLERS[command]
-                    # Для команд, требующих user_id (reload и донатные)
+                    # Команды, требующие user_id
                     if command in ("reload", "donate_roll", "донат_бросок", "donate_stats", "донат_статы", "donate_spark", "донат_искра"):
                         main, details, _ = handler(mention, args, comment, user_id)
                     else:

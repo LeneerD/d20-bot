@@ -11,6 +11,15 @@ from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# ---- Константы ----
+CONSTANTS = {
+    "max_dice": 100,
+    "max_dice_type": 1000,
+    "default_exploration_dice": 3,
+    "adv_keywords": ('adv', 'advantage', 'пр', 'преимущество'),
+    "dis_keywords": ('dis', 'disadvantage', 'пом', 'помеха'),
+}
+
 # ---- Переменные окружения ----
 VK_TOKEN = os.environ.get("VK_TOKEN")
 GROUP_ID = os.environ.get("GROUP_ID")
@@ -94,10 +103,14 @@ def send_message(user_id, message, peer_id=None):
     except Exception as e:
         logger.error(f"Ошибка отправки: {e}")
 
-def format_response(mention, result, comment=None):
+def format_response(mention, main, details=None, comment=None):
+    if details:
+        parts = f"{main} ({details})"
+    else:
+        parts = main
     if comment:
-        return f"{mention}{result} (комментарий: {comment})"
-    return f"{mention}{result}"
+        parts += f" 💬 {comment}"
+    return f"{mention}{parts}"
 
 def extract_comment(cmd):
     if '#' in cmd:
@@ -158,147 +171,284 @@ def reload_tables():
         }
     return any((tables, injury, spark, exploration))
 
-# ---- Основные функции команд ----
-def roll_dice(expression):
-    expr = expression.lower().replace(' ', '').replace('д', 'd')
+# ---- Универсальный парсер бросков ----
+def explode_dice(initial_value, dice_type, explode_type):
+    total = initial_value
+    current = initial_value
+    while True:
+        if explode_type == '!':
+            if current == dice_type:
+                new_roll = random.randint(1, dice_type)
+                total += new_roll
+                current = new_roll
+            else:
+                break
+        elif explode_type == '!!':
+            if current == dice_type or current == 1:
+                new_roll = random.randint(1, dice_type)
+                if current == dice_type:
+                    total += new_roll
+                else:
+                    total -= new_roll
+                current = new_roll
+            else:
+                break
+    return total
+
+def parse_single_component(comp):
+    comp = comp.strip()
+    if not comp:
+        return None, "Пустой компонент", None
+
+    # Заменяем русские 'к' и 'д' на 'd' (быстрее, чем re.sub)
+    comp = comp.replace('к', 'd').replace('К', 'd').replace('д', 'd').replace('Д', 'd')
+
+    # Проверка на adv/dis (используем словарь для унификации)
+    adv_dis_map = {
+        'adv': 1, 'advantage': 1, 'пр': 1, 'преимущество': 1,
+        'dis': -1, 'disadvantage': -1, 'пом': -1, 'помеха': -1
+    }
+    for kw in adv_dis_map:
+        if comp.lower().startswith(kw):
+            rest = comp[len(kw):]
+            roll1, roll2 = random.randint(1, 20), random.randint(1, 20)
+            result = max(roll1, roll2) if adv_dis_map[kw] == 1 else min(roll1, roll2)
+            mods = re.findall(r'([+-]\d+)', rest)
+            for mod in mods:
+                result += int(mod)
+            return result, None, None
+
+    # Обычный бросок кубиков или число
+    if 'd' not in comp:
+        try:
+            return int(comp), None, None
+        except ValueError:
+            return None, f"Неверный компонент: {comp}", None
+
+    # Взрывные
+    explode_type = None
+    explode_count = 0
+    explode_match = re.search(r'(!{1,2})(\d*)', comp)
+    if explode_match:
+        explode_type = explode_match.group(1)
+        explode_count_str = explode_match.group(2)
+        explode_count = int(explode_count_str) if explode_count_str else 1
+        comp = comp[:explode_match.start()] + comp[explode_match.end():]
+
+    # Резист (r или с)
+    resist = False
+    if comp.endswith('r') or comp.endswith('с'):
+        resist = True
+        comp = comp[:-1]
+
+    # Умножение
+    multiplier = 1
+    mult_match = re.search(r'[x*](\d+)', comp)
+    if mult_match:
+        multiplier = int(mult_match.group(1))
+        comp = comp[:mult_match.start()] + comp[mult_match.end():]
+
+    # Модификаторы +-
+    mods = re.findall(r'([+-]\d+)', comp)
+    for mod in mods:
+        comp = comp.replace(mod, '')
+
+    if 'd' not in comp:
+        return None, "Отсутствует 'd' в компоненте", None
+    parts = comp.split('d')
+    if parts[0] == '':
+        num_dice = 1
+    else:
+        try:
+            num_dice = int(parts[0])
+        except ValueError:
+            return None, f"Некорректное количество костей: {parts[0]}", None
+
+    dice_type_str = parts[1]
+    if dice_type_str == '%':
+        dice_type = 100
+    else:
+        try:
+            dice_type = int(dice_type_str)
+        except ValueError:
+            return None, f"Некорректный тип кости: {dice_type_str}", None
+
+    if num_dice > CONSTANTS["max_dice"] or dice_type > CONSTANTS["max_dice_type"] or num_dice <= 0 or dice_type <= 0:
+        return None, "Некорректные параметры кубиков (макс: 100 шт, d1000)", None
+
+    rolls = [random.randint(1, dice_type) for _ in range(num_dice)]
+    if explode_type:
+        if explode_count > num_dice:
+            explode_count = num_dice
+        indices = random.sample(range(num_dice), explode_count) if explode_count > 0 else []
+        total = 0
+        for i, val in enumerate(rolls):
+            if i in indices:
+                total += explode_dice(val, dice_type, explode_type)
+            else:
+                total += val
+    else:
+        total = sum(rolls)
+
+    for mod in mods:
+        total += int(mod)
+    total *= multiplier
+    if resist:
+        total //= 2
+
+    # Формируем детали для вывода
+    details_parts = []
+    if len(rolls) > 1:
+        details_parts.append(", ".join(map(str, rolls)))
+    else:
+        details_parts.append(str(rolls[0]))
+    if mods:
+        details_parts.append(" ".join(mods))
+    if multiplier != 1:
+        details_parts.append(f"x{multiplier}")
+    if resist:
+        details_parts.append("/2")
+    details = " ".join(details_parts)
+
+    return total, None, details
+
+def parse_expression(expr):
     if not expr:
-        return None, "Пустое выражение"
-
-    parts = re.findall(r'([+-]?\d*d\d+|[+-]?\d+)', expr)
-    if not parts:
-        return None, "Неверный формат. Пример: 2d6+1d20+5"
-
+        return None, "Пустое выражение", None
+    parts = re.split(r'\s+', expr)
     total = 0
-    details = []
-
+    all_details = []
     for part in parts:
+        if not part:
+            continue
         sign = 1
-        if part.startswith('-'):
+        if part.startswith('+'):
+            sign = 1
+            part = part[1:]
+        elif part.startswith('-'):
             sign = -1
             part = part[1:]
-        elif part.startswith('+'):
-            part = part[1:]
+        if not part:
+            continue
+        value, error, detail = parse_single_component(part)
+        if error:
+            return None, error, None
+        total += sign * value
+        if detail:
+            all_details.append(f"{sign if sign == -1 else ''}{detail}")
+    return total, None, " ; ".join(all_details) if all_details else None
 
-        if 'd' in part:
-            if part.startswith('d'):
-                num, dice = 1, int(part[1:])
-            else:
-                num_str, dice_str = part.split('d')
-                num = int(num_str) if num_str else 1
-                dice = int(dice_str)
-
-            if num > 100 or dice > 1000 or num <= 0 or dice <= 0:
-                return None, "Некорректные параметры кубиков (макс: 100 шт, d1000)"
-
-            rolls = [random.randint(1, dice) for _ in range(num)]
-            subtotal = sum(rolls) * sign
-            total += subtotal
-            detail = f"{part}=({','.join(map(str, rolls))})" if num > 1 else f"{part}={rolls[0]}"
-            if sign == -1:
-                detail = '-' + detail
-            details.append(detail)
-        else:
-            val = int(part) * sign
-            total += val
-            if val > 0:
-                details.append(f"+{val}")
-            elif val < 0:
-                details.append(str(val))
-
-    return f"{expression} → результат * {total} * ({' '.join(details)})", None
-
+# ---- Основные функции команд ----
 def roll_table(table_name):
     if not TABLES:
-        return None, "Таблицы навыков не загружены."
+        return None, "Таблицы навыков не загружены.", None
     if table_name not in TABLES:
-        return None, f"Таблица '{table_name}' не найдена. Доступны: {', '.join(TABLES.keys())}"
+        return None, f"Таблица '{table_name}' не найдена. Доступны: {', '.join(TABLES.keys())}", None
 
     roll1, roll2 = random.randint(1, 6), random.randint(1, 6)
     total = roll1 + roll2
     entry = TABLES[table_name].get(str(total))
     if not entry:
-        return None, f"Для суммы {total} нет записи в таблице."
+        return None, f"Для суммы {total} нет записи в таблице.", None
 
     name, desc = entry if isinstance(entry, list) and len(entry) >= 2 else (entry, "")
-    return f"2d6 → {roll1}+{roll2} = {total} — {name} — {desc}", None
+    result = f"2d6 → {roll1}+{roll2} = {total} — {name} — {desc}"
+    return result, None, None
 
 def roll_spark(number=None):
     if not SPARK_TABLE:
-        return None, "Таблица Spark не загружена."
+        return None, "Таблица Spark не загружена.", None
     if number is not None:
         key = str(number)
         if key in SPARK_TABLE:
-            return number, SPARK_TABLE[key]
+            return number, SPARK_TABLE[key], None
         else:
-            return None, f"Запись {number} не найдена"
+            return None, f"Запись {number} не найдена", None
     roll = random.randint(1, SPARK_MAX_KEY)
-    return roll, SPARK_TABLE[str(roll)]
+    return roll, SPARK_TABLE[str(roll)], None
 
 def roll_exploration(category, num_dice=None, modifier=0, direct_value=None):
     if category not in EXPLORATION_TABLES:
-        return None, f"Неизвестная категория '{category}'. Доступны: common, rare, legendary"
+        return None, f"Неизвестная категория '{category}'. Доступны: common, rare, legendary", None
     table = EXPLORATION_TABLES[category]
     if not table:
-        return None, f"Таблица '{category}' не загружена."
+        return None, f"Таблица '{category}' не загружена.", None
 
     if direct_value is not None:
         total = direct_value
         desc = table.get(str(total))
-        result = f"Значение {total} из таблицы {category.capitalize()}\nДукаты: **{total * 10}**"
+        result = f"Значение {total} из таблицы {category.capitalize()}\nДукаты: {total * 10}"
         if desc:
             result += f"\nОписание: {desc}"
-        return result, None
+        return result, None, None
 
     if num_dice is None:
-        num_dice = 3
+        num_dice = CONSTANTS["default_exploration_dice"]
     rolls = [random.randint(1, 6) for _ in range(max(1, num_dice))]
     total = sum(rolls) + modifier
     desc = table.get(str(total))
     result = f"Бросок {len(rolls)}d6: {', '.join(map(str, rolls))}"
     if modifier:
         result += f" {modifier:+d}"
-    result += f" = **{total}**\nДукаты: **{total * 10}**"
+    result += f" = {total}\nДукаты: {total * 10}"
     if desc:
         result += f"\nОписание: {desc}"
-    return result, None
+    return result, None, None
 
 def roll_injury():
     units, tens = random.randint(1, 6), random.randint(1, 6)
     result = tens * 10 + units
     entry = INJURY_TABLE.get(str(result), ["Unknown", "No description"])
-    return result, units, tens, entry[0], entry[1]
+    return result, entry[0], entry[1]
 
 def roll_d66():
-    """Бросает D66: две кости, первая – десятки, вторая – единицы."""
     tens = random.randint(1, 6)
     units = random.randint(1, 6)
     result = tens * 10 + units
-    return result, tens, units
+    return result, f"{tens}+{units}"
 
 def flip_coin():
     return "Орёл!" if random.choice([True, False]) else "Решка!"
 
 def random_number(args):
     if not args:
-        return f"🔢 Случайное число от 0 до 100: **{random.randint(0, 100)}**", None
+        return random.randint(0, 100), None
     if len(args) == 2:
         try:
             a, b = sorted(map(int, args[:2]))
-            return f"🔢 Случайное число от {a} до {b}: **{random.randint(a, b)}**", None
+            return random.randint(a, b), None
         except ValueError:
             return None, "Введите два целых числа. Пример: /rand 1 100"
     return None, "Укажите два числа через пробел. Пример: /rand 1 100"
 
-# ---- Обработчики команд ----
-def cmd_help(user_id, peer_id, mention, args, comment):
+def generate_stats():
+    stats = []
+    for _ in range(6):
+        rolls = [random.randint(1, 6) for _ in range(4)]
+        rolls.sort()
+        stats.append(sum(rolls[1:]))
+    return stats
+
+# ---- Обработчики команд (возвращают (main, details, comment) для format_response) ----
+def handle_help(mention, args, comment):
     help_text = (
-        "🎲 **Команды бота:**\n\n"
-        "**Бросок кубиков** (можно через / или !):\n"
-        "/d20 или !d20 — бросить 20-гранный кубик\n"
+        "🎲 *Команды бота:*\n\n"
+        "*Бросок кубиков* (можно через /):\n"
+        "/d20 или /к20 — бросить 20-гранный кубик\n"
         "/2d6+1d20+5 — несколько кубиков разных типов\n"
-        "/d100-3 — d100 с модификатором\n"
-        "/d66 — бросок D66 (две шестёрки, первая – десятки, вторая – единицы)\n\n"
-        "**Специальные команды:**\n"
+        "/d100-3 или /к100-3 — d100 с модификатором\n"
+        "/d66 — бросок D66 (две шестёрки, первая – десятки, вторая – единицы)\n"
+        "/d% или /к% — бросок процентной кости (1-100)\n\n"
+        "*Расширенные броски:*\n"
+        "/<выражение> — поддерживает:\n"
+        "  - множители: x{N} или *{N} (например, /4d8-3x10)\n"
+        "  - резист: r или с в конце (деление на 2, округление вниз)\n"
+        "  - взрывные: ! или !! с количеством костей (например, /6d6!2)\n"
+        "  - преимущество/помеха: /adv или /dis (или русские /пр, /пом)\n"
+        "  - комбинирование через пробел или +/-\n"
+        "  - пример: /4d8-3x10r -2d6+4 d% 6d6!!2\n\n"
+        "*Специальные команды:*\n"
+        "/s или /scores или /х, /характеристики — генерация шести характеристик (4d6, сумма трёх наибольших)\n"
         "/coin или /монетка — подбросить монетку\n"
         "/rand 1 100 — случайное число в диапазоне\n"
         "/inj или /ранение — бросок на ранение по таблице Elites Injury Chart (D66)\n"
@@ -310,124 +460,141 @@ def cmd_help(user_id, peer_id, mention, args, comment):
         "/ping — проверка работы\n"
         "/reload — перезагрузить таблицы (только для владельца)\n"
         "/help — эта справка\n\n"
-        "**Комментарии:**\nДобавьте `# текст` в конце команды для пояснения."
+        "*Комментарии:*\nДобавьте `# текст` в конце команды для пояснения."
     )
-    send_message(user_id, help_text, peer_id)
+    return help_text, None, None
 
-def cmd_coin(user_id, peer_id, mention, args, comment):
-    result = flip_coin()
-    send_message(user_id, format_response(mention, f"Бросок монетки: {result}", comment), peer_id)
+# ---- Универсальный обработчик для простых команд ----
+def make_simple_handler(func):
+    def handler(mention, args, comment):
+        result = func()
+        return result, None, None
+    return handler
 
-def cmd_rand(user_id, peer_id, mention, args, comment):
+# ---- Конкретные обработчики ----
+def handle_coin(mention, args, comment):
+    return f"Бросок монетки: {flip_coin()}", None, None
+
+def handle_rand(mention, args, comment):
     result, error = random_number(args)
     if error:
-        send_message(user_id, format_response(mention, f"Ошибка: {error}", comment), peer_id)
-    else:
-        send_message(user_id, format_response(mention, f"Результат: {result}", comment), peer_id)
+        return f"Ошибка: {error}", None, None
+    return f"Случайное число: {result}", None, None
 
-def cmd_inj(user_id, peer_id, mention, args, comment):
-    result, units, tens, name, desc = roll_injury()
-    send_message(user_id, format_response(mention, f"Бросок на ранение: {tens}+{units} = **{result}** — *{name}* — {desc}", comment), peer_id)
+def handle_inj(mention, args, comment):
+    result, name, desc = roll_injury()
+    main = f"Бросок на ранение: {result} — {name}"
+    details = desc
+    return main, details, None
 
-def cmd_d66(user_id, peer_id, mention, args, comment):
-    result, tens, units = roll_d66()
-    send_message(user_id, format_response(mention, f"Бросок D66: **{result}** (десятки: {tens}, единицы: {units})", comment), peer_id)
+def handle_d66(mention, args, comment):
+    result, details = roll_d66()
+    return f"Бросок D66: {result}", details, None
 
-def cmd_spark(user_id, peer_id, mention, args, comment):
+def handle_spark(mention, args, comment):
     if args:
         try:
             num = int(args[0])
         except ValueError:
-            send_message(user_id, format_response(mention, "Ошибка: укажите число. Пример: /spark 42", comment), peer_id)
-            return
+            return "Ошибка: укажите число. Пример: /spark 42", None, None
         roll, result = roll_spark(num)
     else:
         roll, result = roll_spark()
     if roll is None:
-        send_message(user_id, format_response(mention, f"Ошибка: {result}", comment), peer_id)
-    else:
-        send_message(user_id, format_response(mention, f"Бросок d{SPARK_MAX_KEY}: **{roll}** — {result}", comment), peer_id)
+        return f"Ошибка: {result}", None, None
+    return f"Бросок d{SPARK_MAX_KEY}: {roll} — {result}", None, None
 
-def cmd_skill(user_id, peer_id, mention, args, comment):
+def handle_skill(mention, args, comment):
     table_name = args[0] if args else 'melee'
-    result, error = roll_table(table_name)
+    result, error, _ = roll_table(table_name)
     if error:
-        send_message(user_id, format_response(mention, f"Ошибка: {error}", comment), peer_id)
-    else:
-        send_message(user_id, format_response(mention, f"Бросок навыка ({table_name}): {result}", comment), peer_id)
+        return f"Ошибка: {error}", None, None
+    return f"Бросок навыка ({table_name}): {result}", None, None
 
-def cmd_table(user_id, peer_id, mention, args, comment):
+def handle_table(mention, args, comment):
     if not args:
         available = ", ".join(TABLES.keys()) if TABLES else "нет загруженных таблиц"
-        send_message(user_id, format_response(mention, f"Укажите имя таблицы. Доступные: {available}", comment), peer_id)
-        return
+        return f"Укажите имя таблицы. Доступные: {available}", None, None
     table_name = args[0]
-    result, error = roll_table(table_name)
+    result, error, _ = roll_table(table_name)
     if error:
-        send_message(user_id, format_response(mention, f"Ошибка: {error}", comment), peer_id)
-    else:
-        send_message(user_id, format_response(mention, f"Бросок по таблице {table_name}: {result}", comment), peer_id)
+        return f"Ошибка: {error}", None, None
+    return f"Бросок по таблице {table_name}: {result}", None, None
 
-def cmd_tables(user_id, peer_id, mention, args, comment):
+def handle_tables(mention, args, comment):
     if TABLES:
-        available = ", ".join(TABLES.keys())
-        send_message(user_id, format_response(mention, f"Доступные таблицы: {available}", comment), peer_id)
-    else:
-        send_message(user_id, format_response(mention, "Таблицы навыков не загружены. Проверьте файл tables.json.", comment), peer_id)
+        return f"Доступные таблицы: {', '.join(TABLES.keys())}", None, None
+    return "Таблицы навыков не загружены. Проверьте файл tables.json.", None, None
 
-def cmd_ping(user_id, peer_id, mention, args, comment):
-    send_message(user_id, format_response(mention, "Pong! Бот работает.", comment), peer_id)
+def handle_ping(mention, args, comment):
+    return "Pong! Бот работает.", None, None
 
-def cmd_reload(user_id, peer_id, mention, args, comment):
+def handle_reload(mention, args, comment, user_id):
     if OWNER_ID is None:
-        send_message(user_id, format_response(mention, "Команда /reload отключена (не задан OWNER_ID).", comment), peer_id)
-    elif user_id != OWNER_ID:
-        send_message(user_id, format_response(mention, "У вас нет прав на использование /reload.", comment), peer_id)
-    else:
-        success = reload_tables()
-        if success:
-            send_message(user_id, format_response(mention, "Таблицы успешно перезагружены из файлов.", comment), peer_id)
-        else:
-            send_message(user_id, format_response(mention, "Не удалось перезагрузить таблицы. Проверьте файлы.", comment), peer_id)
+        return "Команда /reload отключена (не задан OWNER_ID).", None, None
+    if user_id != OWNER_ID:
+        return "У вас нет прав на использование /reload.", None, None
+    success = reload_tables()
+    if success:
+        return "Таблицы успешно перезагружены из файлов.", None, None
+    return "Не удалось перезагрузить таблицы. Проверьте файлы.", None, None
 
-def cmd_exp(user_id, peer_id, mention, args, comment):
+def handle_stats(mention, args, comment):
+    stats = generate_stats()
+    return f"Характеристики: {', '.join(map(str, stats))}", None, None
+
+def handle_dpercent(mention, args, comment):
+    result, error, details = parse_expression("d%")
+    if error:
+        return f"Ошибка: {error}", None, None
+    return f"Бросок процентной кости: {result}", details, None
+
+def handle_adv(mention, args, comment):
+    expr = ' '.join(args) if args else ''
+    full_expr = f"adv {expr}" if expr else "adv"
+    result, error, details = parse_expression(full_expr)
+    if error:
+        return f"Ошибка: {error}", None, None
+    return f"Бросок с преимуществом: {result}", details, None
+
+def handle_dis(mention, args, comment):
+    expr = ' '.join(args) if args else ''
+    full_expr = f"dis {expr}" if expr else "dis"
+    result, error, details = parse_expression(full_expr)
+    if error:
+        return f"Ошибка: {error}", None, None
+    return f"Бросок с помехой: {result}", details, None
+
+def handle_exp(mention, args, comment):
     if not args:
-        send_message(user_id, format_response(mention, "Укажите категорию: common, rare или legendary. Пример: /exp common 3d6 или /exp common 10", comment), peer_id)
-        return
+        return "Укажите категорию: common, rare или legendary. Пример: /exp common 3d6 или /exp common 10", None, None
     category = args[0].lower()
     if category not in ('common', 'rare', 'legendary'):
-        send_message(user_id, format_response(mention, f"Неверная категория. Доступные: common, rare, legendary.", comment), peer_id)
-        return
+        return f"Неверная категория. Доступные: common, rare, legendary.", None, None
 
     if len(args) == 1:
-        result, error = roll_exploration(category, num_dice=3)
+        result, error, _ = roll_exploration(category, num_dice=CONSTANTS["default_exploration_dice"])
         if error:
-            send_message(user_id, format_response(mention, f"Ошибка: {error}", comment), peer_id)
-        else:
-            send_message(user_id, format_response(mention, result, comment), peer_id)
-        return
+            return f"Ошибка: {error}", None, None
+        return result, None, None
 
     expr = args[1].lower().replace(' ', '')
-
     if expr.isdigit():
         try:
             direct_val = int(expr)
             if direct_val < 0:
                 raise ValueError
-            result, error = roll_exploration(category, direct_value=direct_val)
+            result, error, _ = roll_exploration(category, direct_value=direct_val)
             if error:
-                send_message(user_id, format_response(mention, f"Ошибка: {error}", comment), peer_id)
-            else:
-                send_message(user_id, format_response(mention, result, comment), peer_id)
+                return f"Ошибка: {error}", None, None
+            return result, None, None
         except ValueError:
-            send_message(user_id, format_response(mention, "Ошибка: укажите положительное целое число.", comment), peer_id)
-        return
+            return "Ошибка: укажите положительное целое число.", None, None
 
     if 'd' not in expr:
-        send_message(user_id, format_response(mention, "Ошибка: укажите выражение с d (например, 3d6) или простое число.", comment), peer_id)
-        return
+        return "Ошибка: укажите выражение с d (например, 3d6) или простое число.", None, None
 
-    num_dice = 3
+    num_dice = CONSTANTS["default_exploration_dice"]
     modifier = 0
     mod_match = re.search(r'([+-]\d+)$', expr)
     if mod_match:
@@ -443,38 +610,49 @@ def cmd_exp(user_id, peer_id, mention, args, comment):
                 if num_dice < 1:
                     raise ValueError
             except ValueError:
-                send_message(user_id, format_response(mention, "Ошибка: некорректное число кубиков. Пример: 3d6 или 11+d6.", comment), peer_id)
-                return
+                return "Ошибка: некорректное число кубиков. Пример: 3d6 или 11+d6.", None, None
     else:
-        send_message(user_id, format_response(mention, "Ошибка: выражение должно содержать d. Пример: 3d6 или 11+d6.", comment), peer_id)
-        return
+        return "Ошибка: выражение должно содержать d. Пример: 3d6 или 11+d6.", None, None
 
-    result, error = roll_exploration(category, num_dice, modifier)
+    result, error, _ = roll_exploration(category, num_dice, modifier)
     if error:
-        send_message(user_id, format_response(mention, f"Ошибка: {error}", comment), peer_id)
-    else:
-        send_message(user_id, format_response(mention, result, comment), peer_id)
+        return f"Ошибка: {error}", None, None
+    return result, None, None
 
 # ---- Словарь команд ----
 COMMAND_HANDLERS = {
-    "help": cmd_help,
-    "помощь": cmd_help,
-    "coin": cmd_coin,
-    "монетка": cmd_coin,
-    "rand": cmd_rand,
-    "random": cmd_rand,
-    "inj": cmd_inj,
-    "ранение": cmd_inj,
-    "injury": cmd_inj,
-    "d66": cmd_d66,
-    "spark": cmd_spark,
-    "skill": cmd_skill,
-    "навык": cmd_skill,
-    "table": cmd_table,
-    "tables": cmd_tables,
-    "ping": cmd_ping,
-    "exp": cmd_exp,
-    "reload": cmd_reload
+    "help": handle_help,
+    "помощь": handle_help,
+    "coin": handle_coin,
+    "монетка": handle_coin,
+    "rand": handle_rand,
+    "random": handle_rand,
+    "inj": handle_inj,
+    "ранение": handle_inj,
+    "injury": handle_inj,
+    "d66": handle_d66,
+    "spark": handle_spark,
+    "skill": handle_skill,
+    "навык": handle_skill,
+    "table": handle_table,
+    "tables": handle_tables,
+    "ping": handle_ping,
+    "exp": handle_exp,
+    "reload": handle_reload,
+    "s": handle_stats,
+    "scores": handle_stats,
+    "х": handle_stats,
+    "характеристики": handle_stats,
+    "d%": handle_dpercent,
+    "к%": handle_dpercent,
+    "adv": handle_adv,
+    "advantage": handle_adv,
+    "пр": handle_adv,
+    "преимущество": handle_adv,
+    "dis": handle_dis,
+    "disadvantage": handle_dis,
+    "пом": handle_dis,
+    "помеха": handle_dis,
 }
 
 # ---- Главный цикл ----
@@ -486,7 +664,7 @@ for event in longpoll.listen():
             user_id = event.object.message['from_id']
             text = event.object.message['text'].strip()
 
-            if not text or not text.startswith(('/', '!')):
+            if not text or not text.startswith('/'):
                 continue
 
             cmd_raw = text[1:].strip()
@@ -505,13 +683,19 @@ for event in longpoll.listen():
             mention = mention_user(user_id, peer_id)
 
             if command in COMMAND_HANDLERS:
-                COMMAND_HANDLERS[command](user_id, peer_id, mention, args, comment)
-            else:
-                result, error = roll_dice(cmd_clean)
-                if error:
-                    send_message(user_id, format_response(mention, f"Ошибка: {error}"), peer_id)
+                handler = COMMAND_HANDLERS[command]
+                if command == "reload":
+                    main, details, _ = handler(mention, args, comment, user_id)
                 else:
-                    send_message(user_id, format_response(mention, f"Бросок {result}", comment), peer_id)
+                    main, details, _ = handler(mention, args, comment)
+                send_message(user_id, format_response(mention, main, details, comment), peer_id)
+            else:
+                result, error, details = parse_expression(cmd_clean)
+                if error:
+                    send_message(user_id, format_response(mention, f"Ошибка: {error}", None, comment), peer_id)
+                else:
+                    main = f"бросок {cmd_clean}: {result}"
+                    send_message(user_id, format_response(mention, main, details, comment), peer_id)
 
         except Exception as e:
             logger.error(f"Ошибка в цикле: {e}")

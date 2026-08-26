@@ -60,8 +60,11 @@ vk = vk_session.get_api()
 donor_cache = {}
 
 def is_donor(user_id):
-    # Владелец (OWNER_ID) всегда считается донатером для тестирования
+    # Владелец
     if OWNER_ID is not None and user_id == OWNER_ID:
+        return True
+    # Тестировщики из JSON
+    if user_id in testers:
         return True
 
     user_id_str = str(user_id)
@@ -137,7 +140,23 @@ def extract_comment(cmd):
         clean, comment = cmd.rsplit('#', 1)
         return clean.strip(), comment.strip()
     return cmd, None
+# ---- Загрузка списка тестировщиков ----
+TESTERS_FILE = "testers.json"
 
+def load_testers():
+    try:
+        with open(TESTERS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data.get("testers", [])
+    except (FileNotFoundError, json.JSONDecodeError, IOError):
+        return []
+
+testers = load_testers()
+
+def reload_testers():
+    global testers
+    testers = load_testers()
+    return testers
 # ---- Загрузчик таблиц ----
 TABLE_FILES = {
     "tables": "tables.json",

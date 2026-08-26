@@ -6,6 +6,7 @@ import time
 import logging
 import vk_api
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
+from requests.exceptions import ReadTimeout, ConnectionError
 
 # ---- Настройка логирования ----
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -52,6 +53,7 @@ def init_longpoll_with_retry(session, group_id, retries=5, delay=3):
                 raise
             time.sleep(delay)
 
+# Создаём LongPoll с повторными попытками
 longpoll = init_longpoll_with_retry(vk_session, GROUP_ID)
 vk = vk_session.get_api()
 
@@ -200,10 +202,10 @@ def parse_single_component(comp):
     if not comp:
         return None, "Пустой компонент", None
 
-    # Заменяем русские 'к' и 'д' на 'd' (быстрее, чем re.sub)
+    # Заменяем русские 'к' и 'д' на 'd'
     comp = comp.replace('к', 'd').replace('К', 'd').replace('д', 'd').replace('Д', 'd')
 
-    # Проверка на adv/dis (используем словарь для унификации)
+    # Проверка на adv/dis
     adv_dis_map = {
         'adv': 1, 'advantage': 1, 'пр': 1, 'преимущество': 1,
         'dis': -1, 'disadvantage': -1, 'пом': -1, 'помеха': -1
@@ -465,13 +467,6 @@ def handle_help(mention, args, comment):
     return help_text, None, None
 
 # ---- Универсальный обработчик для простых команд ----
-def make_simple_handler(func):
-    def handler(mention, args, comment):
-        result = func()
-        return result, None, None
-    return handler
-
-# ---- Конкретные обработчики ----
 def handle_coin(mention, args, comment):
     return f"Бросок монетки: {flip_coin()}", None, None
 
@@ -655,52 +650,55 @@ COMMAND_HANDLERS = {
     "помеха": handle_dis,
 }
 
-# ---- Главный цикл ----
+# ---- Главный цикл с обработкой ошибок ----
 logger.info("Бот успешно запущен и слушает сообщения...")
-for event in longpoll.listen():
-    if event.type == VkBotEventType.MESSAGE_NEW:
-        try:
-            peer_id = event.object.message['peer_id']
-            user_id = event.object.message['from_id']
-            text = event.object.message['text'].strip()
-
-            if not text or not text.startswith('/'):
-                continue
-
-            cmd_raw = text[1:].strip()
-            if not cmd_raw:
-                send_message(user_id, format_response(mention_user(user_id, peer_id), "Введите команду. Например: /d20"), peer_id)
-                continue
-
-            cmd_clean, comment = extract_comment(cmd_raw)
-            parts = cmd_clean.split()
-            if not parts:
-                send_message(user_id, format_response(mention_user(user_id, peer_id), "Введите команду. Например: /d20"), peer_id)
-                continue
-
-            command = parts[0].lower()
-            args = parts[1:] if len(parts) > 1 else []
-            mention = mention_user(user_id, peer_id)
-
-            if command in COMMAND_HANDLERS:
-                handler = COMMAND_HANDLERS[command]
-                if command == "reload":
-                    main, details, _ = handler(mention, args, comment, user_id)
-                else:
-                    main, details, _ = handler(mention, args, comment)
-                send_message(user_id, format_response(mention, main, details, comment), peer_id)
-            else:
-                result, error, details = parse_expression(cmd_clean)
-                if error:
-                    send_message(user_id, format_response(mention, f"Ошибка: {error}", None, comment), peer_id)
-                else:
-                    main = f"бросок {cmd_clean}: {result}"
-                    send_message(user_id, format_response(mention, main, details, comment), peer_id)
-
-        except Exception as e:
-            logger.error(f"Ошибка в цикле: {e}")
+while True:
+    try:
+        for event in longpoll.listen():
             try:
+                peer_id = event.object.message['peer_id']
+                user_id = event.object.message['from_id']
+                text = event.object.message['text'].strip()
+
+                if not text or not text.startswith('/'):
+                    continue
+
+                cmd_raw = text[1:].strip()
+                if not cmd_raw:
+                    send_message(user_id, format_response(mention_user(user_id, peer_id), "Введите команду. Например: /d20"), peer_id)
+                    continue
+
+                cmd_clean, comment = extract_comment(cmd_raw)
+                parts = cmd_clean.split()
+                if not parts:
+                    send_message(user_id, format_response(mention_user(user_id, peer_id), "Введите команду. Например: /d20"), peer_id)
+                    continue
+
+                command = parts[0].lower()
+                args = parts[1:] if len(parts) > 1 else []
                 mention = mention_user(user_id, peer_id)
-                send_message(user_id, f"{mention}⚠️ Произошла ошибка. Попробуйте позже.", peer_id)
-            except:
-                pass
+
+                if command in COMMAND_HANDLERS:
+                    handler = COMMAND_HANDLERS[command]
+                    if command == "reload":
+                        main, details, _ = handler(mention, args, comment, user_id)
+                    else:
+                        main, details, _ = handler(mention, args, comment)
+                    send_message(user_id, format_response(mention, main, details, comment), peer_id)
+                else:
+                    result, error, details = parse_expression(cmd_clean)
+                    if error:
+                        send_message(user_id, format_response(mention, f"Ошибка: {error}", None, comment), peer_id)
+                    else:
+                        main = f"бросок {cmd_clean}: {result}"
+                        send_message(user_id, format_response(mention, main, details, comment), peer_id)
+
+            except Exception as e:
+                logger.error(f"Ошибка обработки события: {e}")
+                # Продолжаем слушать дальше, не прерывая цикл
+                continue
+    except (ReadTimeout, ConnectionError, Exception) as e:
+        logger.error(f"Ошибка соединения с VK: {e}. Переподключение через 5 секунд...")
+        time.sleep(5)
+        # Пересоздаём LongPoll
+        longpoll = init_longpoll_with_retry(vk_session, GROUP_ID)

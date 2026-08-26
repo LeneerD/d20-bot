@@ -17,8 +17,6 @@ CONSTANTS = {
     "max_dice": 100,
     "max_dice_type": 1000,
     "default_exploration_dice": 3,
-    "adv_keywords": ('adv', 'advantage', 'пр', 'преимущество'),
-    "dis_keywords": ('dis', 'disadvantage', 'пом', 'помеха'),
 }
 
 # ---- Переменные окружения ----
@@ -53,9 +51,24 @@ def init_longpoll_with_retry(session, group_id, retries=5, delay=3):
                 raise
             time.sleep(delay)
 
-# Создаём LongPoll с повторными попытками
 longpoll = init_longpoll_with_retry(vk_session, GROUP_ID)
 vk = vk_session.get_api()
+
+# ---- Проверка донатера (VK Donut) ----
+donor_cache = {}
+
+def is_donor(user_id):
+    user_id_str = str(user_id)
+    if user_id_str in donor_cache:
+        return donor_cache[user_id_str]
+    try:
+        # Токен должен иметь доступ к методу donut.isDon
+        response = vk.method('donut.isDon', {'user_id': user_id})
+        donor_cache[user_id_str] = response
+        return response
+    except Exception as e:
+        logger.error(f"Ошибка проверки доната для {user_id}: {e}")
+        return False
 
 # ---- Утилиты ----
 NICKNAMES_FILE = "nicknames.json"
@@ -462,6 +475,10 @@ def handle_help(mention, args, comment):
         "/ping — проверка работы\n"
         "/reload — перезагрузить таблицы (только для владельца)\n"
         "/help — эта справка\n\n"
+        "*Эксклюзивные команды для донатеров VK Donut:*\n"
+        "/donate_roll или /донат_бросок — эксклюзивный бросок 4d6\n"
+        "/donate_stats или /донат_статы — генерация 7 характеристик (вместо 6)\n"
+        "/donate_spark или /донат_искра — бросок по таблице Spark с бонусом +5 (или просмотр конкретной прокачки по номеру)\n\n"
         "*Комментарии:*\nДобавьте `# текст` в конце команды для пояснения."
     )
     return help_text, None, None
@@ -614,6 +631,49 @@ def handle_exp(mention, args, comment):
         return f"Ошибка: {error}", None, None
     return result, None, None
 
+# ---- Эксклюзивные команды для донатеров ----
+def handle_donate_roll(mention, args, comment, user_id):
+    if not is_donor(user_id):
+        return "Этот функционал доступен только донатерам! Оформите подписку VK Donut.", None, None
+    
+    rolls = [random.randint(1, 6) for _ in range(4)]
+    total = sum(rolls)
+    details = ", ".join(map(str, rolls))
+    return f"Эксклюзивный бросок 4d6: {total}", details, None
+
+def handle_donate_stats(mention, args, comment, user_id):
+    if not is_donor(user_id):
+        return "Этот функционал доступен только донатерам! Оформите подписку VK Donut.", None, None
+    
+    stats = []
+    for _ in range(7):
+        rolls = [random.randint(1, 6) for _ in range(4)]
+        rolls.sort()
+        stats.append(sum(rolls[1:]))
+    return f"Эксклюзивные характеристики (7 шт): {', '.join(map(str, stats))}", None, None
+
+def handle_donate_spark(mention, args, comment, user_id):
+    if not is_donor(user_id):
+        return "Этот функционал доступен только донатерам! Оформите подписку VK Donut.", None, None
+    
+    if not SPARK_TABLE:
+        return "Таблица Spark не загружена.", None, None
+    
+    if args:
+        try:
+            num = int(args[0])
+        except ValueError:
+            return "Ошибка: укажите число. Пример: /donate_spark 42", None, None
+        if str(num) in SPARK_TABLE:
+            return f"Прокачка Spark #{num}: {SPARK_TABLE[str(num)]}", None, None
+        else:
+            return f"Запись {num} не найдена.", None, None
+    else:
+        roll = random.randint(1, SPARK_MAX_KEY)
+        modified = min(roll + 5, SPARK_MAX_KEY)
+        desc = SPARK_TABLE.get(str(modified), "Описание отсутствует")
+        return f"Эксклюзивный бросок d{SPARK_MAX_KEY} с бонусом +5: {modified} (исходный бросок: {roll}) — {desc}", None, None
+
 # ---- Словарь команд ----
 COMMAND_HANDLERS = {
     "help": handle_help,
@@ -648,6 +708,13 @@ COMMAND_HANDLERS = {
     "disadvantage": handle_dis,
     "пом": handle_dis,
     "помеха": handle_dis,
+    # Эксклюзивные команды для донатеров
+    "donate_roll": handle_donate_roll,
+    "донат_бросок": handle_donate_roll,
+    "donate_stats": handle_donate_stats,
+    "донат_статы": handle_donate_stats,
+    "donate_spark": handle_donate_spark,
+    "донат_искра": handle_donate_spark,
 }
 
 # ---- Главный цикл с обработкой ошибок ----
@@ -680,7 +747,8 @@ while True:
 
                 if command in COMMAND_HANDLERS:
                     handler = COMMAND_HANDLERS[command]
-                    if command == "reload":
+                    # Для команд, требующих user_id (reload и донатные)
+                    if command in ("reload", "donate_roll", "донат_бросок", "donate_stats", "донат_статы", "donate_spark", "донат_искра"):
                         main, details, _ = handler(mention, args, comment, user_id)
                     else:
                         main, details, _ = handler(mention, args, comment)
@@ -695,10 +763,8 @@ while True:
 
             except Exception as e:
                 logger.error(f"Ошибка обработки события: {e}")
-                # Продолжаем слушать дальше, не прерывая цикл
                 continue
     except (ReadTimeout, ConnectionError, Exception) as e:
         logger.error(f"Ошибка соединения с VK: {e}. Переподключение через 5 секунд...")
         time.sleep(5)
-        # Пересоздаём LongPoll
         longpoll = init_longpoll_with_retry(vk_session, GROUP_ID)
